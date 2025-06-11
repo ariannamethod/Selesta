@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+aiogram==3.*
+aiohttp
+openai
+pinecone
+python-dotenv
+feedparser
+pypdf
