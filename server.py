@@ -25,7 +25,7 @@ MODEL_NAME = "gpt-4o"
 CREATOR_CHAT_ID = os.getenv("CREATOR_CHAT_ID") # set in .env if you want special "ping"
 
 bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-dp = Dispatcher()
+dp = Dispatcher(bot=bot)  # <--- Важно! Передаём bot=bot
 
 CHAT_HISTORY = {}  # {chat_id: [{"role":..., "content":...}]}
 USER_LANG = {}     # {chat_id: "ru"/"en"}
