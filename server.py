@@ -2,6 +2,8 @@ import os
 import glob
 import asyncio
 import aiohttp
+import time
+from datetime import datetime, timedelta
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
@@ -28,6 +30,11 @@ USER_LANG = {}     # {chat_id: "ru"/"en"}
 VOICE_MODE = {}    # {chat_id: True/False}
 SYSTEM_PROMPT = {"text": None, "loaded": False}
 HISTORY_LIMIT = 30
+LOG_PATH = "data/journal.json"
+
+# Для авто-обновления
+last_reload_time = datetime.now()
+last_full_reload_time = datetime.now()
 
 # === Сборка системного промпта ===
 def build_system_prompt():
@@ -50,6 +57,21 @@ def detect_lang(text):
     if any(c in text for c in "ёйцукенгшщзхъфывапролджэячсмитьбю"):
         return "ru"
     return "en"
+
+# === Логирование событий ===
+def log_event(event):
+    try:
+        if not os.path.isfile(LOG_PATH):
+            with open(LOG_PATH, "w", encoding="utf-8") as f:
+                f.write("[]")
+        import json
+        with open(LOG_PATH, "r", encoding="utf-8") as f:
+            log = json.load(f)
+        log.append({"ts": datetime.now().isoformat(), **event})
+        with open(LOG_PATH, "w", encoding="utf-8") as f:
+            json.dump(log, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 # === ask_core ===
 async def ask_core(prompt, chat_id=None):
@@ -87,21 +109,81 @@ async def ask_core(prompt, chat_id=None):
     except Exception as e:
         return f"Core error: {str(e)}"
 
-# === Триггер на первое сообщение: авто-загрузка базы ===
+# === Генерация изображений (OpenAI DALL-E 3) ===
+async def generate_image(prompt, chat_id=None):
+    openai.api_key = OPENAI_API_KEY
+    try:
+        response = openai.images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            n=1,
+            size="1024x1024"
+        )
+        image_url = response.data[0].url
+        return image_url
+    except Exception as e:
+        return f"Image generation error: {str(e)}"
+
+TRIGGER_WORDS = [
+    "сгенерируй", "нарисуй", "draw", "generate image", "make a picture", "создай картинку"
+]
+
+# === Фоновая задача для автообновления базы знаний ===
+async def auto_reload_core():
+    global last_reload_time, last_full_reload_time
+    while True:
+        now = datetime.now()
+        # Раз в сутки — обновить core.json, раз в 3 дня — полная перезагрузка .md
+        if (now - last_reload_time) > timedelta(days=1):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(CORE_CONFIG_URL) as resp:
+                        if resp.status == 200:
+                            log_event({"event": "core.json reloaded"})
+                            # (можно добавить логику обновления чего-то из core.json, если потребуется)
+                last_reload_time = now
+            except Exception:
+                pass
+        if (now - last_full_reload_time) > timedelta(days=3):
+            SYSTEM_PROMPT["text"] = build_system_prompt()
+            SYSTEM_PROMPT["loaded"] = True
+            log_event({"event": "full md reload"})
+            last_full_reload_time = now
+        await asyncio.sleep(3600)  # Проверять раз в час
+
+# === Триггер на первое сообщение: авто-загрузка базы и обработка команд ===
 @dp.message()
 async def handle_message(message: types.Message):
     chat_id = message.chat.id
     content = message.text or ""
+
     # Если это первое сообщение — авто /load
     if chat_id not in CHAT_HISTORY:
         SYSTEM_PROMPT["text"] = build_system_prompt()
         SYSTEM_PROMPT["loaded"] = True
-    # /load — обновить базу знаний
+
+    # Генерация изображения по триггеру
+    if any(word in content.lower() for word in TRIGGER_WORDS):
+        prompt = content
+        for word in TRIGGER_WORDS:
+            prompt = prompt.replace(word, "", 1)
+        prompt = prompt.strip() or "dreamlike surreal image"
+        image_url = await generate_image(prompt, chat_id=chat_id)
+        if isinstance(image_url, str) and image_url.startswith("http"):
+            await message.answer_photo(image_url, caption="Вот твоя картинка!")
+        else:
+            await message.answer(image_url)
+        return
+
+    # /load — обновить базу знаний и очистить историю
     if content.startswith("/load"):
         SYSTEM_PROMPT["text"] = build_system_prompt()
         SYSTEM_PROMPT["loaded"] = True
-        await message.answer("Все .md из /config были перечитаны и база обновлена.")
+        CHAT_HISTORY[chat_id] = []
+        await message.answer("Все .md из /config были перечитаны и база обновлена. История чата сброшена.")
+        log_event({"event": "manual load", "chat_id": chat_id})
         return
+
     # /where is <file> — поиск по названию
     if content.startswith("/where is"):
         query = content.replace("/where is", "").strip().lower()
@@ -114,19 +196,24 @@ async def handle_message(message: types.Message):
         else:
             await message.answer("Ничего не найдено.")
         return
+
     # /voiceon — включить озвучку
     if content.startswith("/voiceon"):
         VOICE_MODE[chat_id] = True
         await message.answer("Озвучивание включено. Теперь Selesta будет присылать аудиофайлы к ответам.")
+        log_event({"event": "voiceon", "chat_id": chat_id})
         return
+
     # /voiceoff — выключить озвучку
     if content.startswith("/voiceoff"):
         VOICE_MODE[chat_id] = False
         await message.answer("Озвучивание выключено. Selesta снова пишет только текстом.")
+        log_event({"event": "voiceoff", "chat_id": chat_id})
         return
+
     # Обычное сообщение
     reply = await ask_core(content, chat_id=chat_id)
-    # Разбиваем по лимиту Telegram (очень важно!)
+    # Разбиваем по лимиту Telegram
     for chunk in split_message(reply):
         await message.answer(chunk)
         # Если режим озвучки включён — присылаем аудиофайл
@@ -165,6 +252,7 @@ async def handle_voice(message: types.Message):
 async def text_to_speech(text, lang="ru"):
     try:
         openai.api_key = OPENAI_API_KEY
+        # Можно добавить shimmer/alloy/nova — поддержка выбора голоса
         voice = "alloy" if lang == "en" else "nova"
         resp = openai.audio.speech.create(
             model="tts-1",
@@ -180,6 +268,10 @@ async def text_to_speech(text, lang="ru"):
 
 # === FastAPI ===
 app = FastAPI()
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(auto_reload_core())
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
