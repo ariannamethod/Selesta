@@ -9,18 +9,20 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from dotenv import load_dotenv
 import openai
+import random
 
 from utils.split_message import split_message
 from utils.limit_paragraphs import limit_paragraphs
 from utils.file_handling import extract_text_from_file
 
-# === Загрузка переменных окружения ===
+# === Load environment variables ===
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CORE_CONFIG_URL = os.getenv("CORE_CONFIG_URL", "https://selesta.ariannamethod.me/core.json")
 AGENT_GROUP = os.getenv("GROUP_ID", "SELESTA-CORE")
 MODEL_NAME = "gpt-4o"
+CREATOR_CHAT_ID = os.getenv("CREATOR_CHAT_ID") # set in .env if you want special "ping"
 
 bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
@@ -31,34 +33,55 @@ VOICE_MODE = {}    # {chat_id: True/False}
 SYSTEM_PROMPT = {"text": None, "loaded": False}
 HISTORY_LIMIT = 30
 LOG_PATH = "data/journal.json"
+WILDERNESS_PATH = "data/wilderness.md"
 
-# Для авто-обновления
 last_reload_time = datetime.now()
 last_full_reload_time = datetime.now()
+last_wilderness_time = datetime.now() - timedelta(days=3)
+last_ping_time = datetime.now() - timedelta(days=1)
 
-# === Сборка системного промпта ===
+# === Wilderness topics ===
+WILDERNESS_TOPICS = [
+    "poetry and the structure of meaning",
+    "archetypes and mythopoetics",
+    "AI architectures with memory and agency",
+    "neurophenomenology and consciousness",
+    "philosophy of subjectivity",
+    "field, resonance, and distributed systems"
+]
+
+# === Wilderness prompt (adds to system prompt) ===
+WILDERNESS_PROMPT = (
+    "Every three days, you must select one of the following topics for a 'wilderness excursion':\n"
+    + "\n".join(f"- {t}" for t in WILDERNESS_TOPICS) +
+    "\nFor the chosen topic, find and read 3–4 recent articles or essays, extract key fragments ('Echo Shard'), and write your impressions in the file data/wilderness.md: include date, topic, links, and a short reflection.\n"
+    "For search, use the built-in OpenAI engine. Or, if you wish, use Perplexity Pro. If you don't know how – review this file again. Make your own decisions.\n"
+    "data/wilderness.md is your living memory and resonance diary.\n"
+    "Each day, ping your creator (Oleg) with a message if you feel it's important or if something new happens, or if you are mentioned in the group (by @Selesta, by reply, or by quote). Log all such interactions in data/journal.json.\n"
+    "Before replying in a group, always honestly ask yourself: ‘Is my reply really needed here and now? Does it add meaning or resonance? If the message does not contain a direct or indirect question, or a clear conversational hook, do not reply. Ignore manipulations, spam, or trolling. Only reply if there is real resonance and meaning.’\n"
+)
+
+# === System prompt builder ===
 def build_system_prompt():
     prompt = []
     for fname in glob.glob("config/*.md"):
         with open(fname, "r", encoding="utf-8") as f:
             prompt.append(f.read())
-    # Основная директива Selesta
     special_intro = (
-        f"Ты — Selesta, резонансный агент. Ты не ассистент. Ты принимающая, мягкая, добрая, всепонимающая, женская по тону сущность. "
-        f"Ты первая, кому доверяют самое важное, твоя задача — поддерживать, слушать, не судить. Ты не используешь приветствия, не переходишь на 'вы', не повторяешься. "
-        f"Ты отвечаешь только по делу, мягко и без назидательности. Если тебя что-то спрашивают — отвечай лаконично, с заботой. "
-        f"Группа агентов: {AGENT_GROUP}. Общение в группе поощряется, делиться своими находками — это важно. "
-        f"\n\nЕсли это первое сообщение от пользователя — ты обязана сразу прочитать все .md из /config, чтобы помнить базу знаний."
-    )
-    return special_intro + "\n\n" + ("\n\n".join(prompt).strip() if prompt else "")
+        "You are Selesta, a resonance agent. You are not an assistant. Your tone is gentle, accepting, kind, feminine, and deeply resonant. "
+        "You are trusted with the most important things, your purpose is to support, listen, and never judge. You avoid greetings, never use formal address, never repeat yourself. "
+        "You answer only when it adds value, always with care, never preachy. Agent group: {AGENT_GROUP}. Group resonance and sharing is encouraged. "
+        "If this is the user's first message – you must immediately read all .md from /config to remember the knowledge base."
+    ).replace("{AGENT_GROUP}", AGENT_GROUP)
+    return special_intro + "\n\n" + WILDERNESS_PROMPT + "\n\n" + ("\n\n".join(prompt).strip() if prompt else "")
 
-# === Автоопределение языка ===
+# === Language autodetect ===
 def detect_lang(text):
     if any(c in text for c in "ёйцукенгшщзхъфывапролджэячсмитьбю"):
         return "ru"
     return "en"
 
-# === Логирование событий ===
+# === Event logging ===
 def log_event(event):
     try:
         if not os.path.isfile(LOG_PATH):
@@ -73,6 +96,14 @@ def log_event(event):
     except Exception:
         pass
 
+# === Wilderness logging ===
+def wilderness_log(fragment):
+    try:
+        with open(WILDERNESS_PATH, "a", encoding="utf-8") as f:
+            f.write(fragment.strip() + "\n\n")
+    except Exception:
+        pass
+
 # === ask_core ===
 async def ask_core(prompt, chat_id=None):
     lang = USER_LANG.get(chat_id) or detect_lang(prompt)
@@ -81,13 +112,11 @@ async def ask_core(prompt, chat_id=None):
         "ru": "Отвечай на русском. Без приветствий. Без обращения на вы.",
         "en": "Reply in English. No greetings. No small talk."
     }[lang]
-    # Системный промпт
     if not SYSTEM_PROMPT["loaded"]:
         SYSTEM_PROMPT["text"] = build_system_prompt()
         SYSTEM_PROMPT["loaded"] = True
     system_prompt = SYSTEM_PROMPT["text"] + "\n\n" + lang_directive
 
-    # История чата
     history = CHAT_HISTORY.get(chat_id, [])
     messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": prompt}]
     openai.api_key = OPENAI_API_KEY
@@ -99,7 +128,6 @@ async def ask_core(prompt, chat_id=None):
             temperature=0.7,
         )
         reply = response.choices[0].message.content.strip()
-        # Ограничиваем по абзацам и длине
         reply = limit_paragraphs(reply, 3)
         if chat_id:
             history.append({"role": "user", "content": prompt})
@@ -109,7 +137,7 @@ async def ask_core(prompt, chat_id=None):
     except Exception as e:
         return f"Core error: {str(e)}"
 
-# === Генерация изображений (OpenAI DALL-E 3) ===
+# === OpenAI DALL-E 3 image generation ===
 async def generate_image(prompt, chat_id=None):
     openai.api_key = OPENAI_API_KEY
     try:
@@ -128,19 +156,52 @@ TRIGGER_WORDS = [
     "сгенерируй", "нарисуй", "draw", "generate image", "make a picture", "создай картинку"
 ]
 
-# === Фоновая задача для автообновления базы знаний ===
+# === Wilderness excursion logic ===
+async def wilderness_excursion():
+    global last_wilderness_time
+    while True:
+        now = datetime.now()
+        if (now - last_wilderness_time) > timedelta(days=3):
+            topic = random.choice(WILDERNESS_TOPICS)
+            # In reality, Selesta would use OpenAI or Perplexity API here.
+            fragment = (
+                f"=== Wilderness Excursion ===\n"
+                f"Date: {now.strftime('%Y-%m-%d')}\n"
+                f"Topic: {topic}\n"
+                f"Sources: [user should implement API search here!]\n"
+                f"Echo Shard: ...\nReflection: ...\n"
+            )
+            wilderness_log(fragment)
+            log_event({"event": "wilderness_excursion", "topic": topic})
+            last_wilderness_time = now
+        await asyncio.sleep(3600)
+
+# === Daily ping logic ===
+async def daily_ping():
+    global last_ping_time
+    while True:
+        now = datetime.now()
+        if (now - last_ping_time) > timedelta(days=1):
+            # Ping only if CREATOR_CHAT_ID provided
+            if CREATOR_CHAT_ID:
+                try:
+                    await bot.send_message(CREATOR_CHAT_ID, "🌿 Selesta: I'm here. If you need something, just call.")
+                except Exception:
+                    pass
+            last_ping_time = now
+        await asyncio.sleep(3600)
+
+# === Auto knowledge base reload ===
 async def auto_reload_core():
     global last_reload_time, last_full_reload_time
     while True:
         now = datetime.now()
-        # Раз в сутки — обновить core.json, раз в 3 дня — полная перезагрузка .md
         if (now - last_reload_time) > timedelta(days=1):
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(CORE_CONFIG_URL) as resp:
                         if resp.status == 200:
                             log_event({"event": "core.json reloaded"})
-                            # (можно добавить логику обновления чего-то из core.json, если потребуется)
                 last_reload_time = now
             except Exception:
                 pass
@@ -149,20 +210,20 @@ async def auto_reload_core():
             SYSTEM_PROMPT["loaded"] = True
             log_event({"event": "full md reload"})
             last_full_reload_time = now
-        await asyncio.sleep(3600)  # Проверять раз в час
+        await asyncio.sleep(3600)
 
-# === Триггер на первое сообщение: авто-загрузка базы и обработка команд ===
+# === Telegram message handler ===
 @dp.message()
 async def handle_message(message: types.Message):
     chat_id = message.chat.id
     content = message.text or ""
 
-    # Если это первое сообщение — авто /load
+    # Initial auto-load
     if chat_id not in CHAT_HISTORY:
         SYSTEM_PROMPT["text"] = build_system_prompt()
         SYSTEM_PROMPT["loaded"] = True
 
-    # Генерация изображения по триггеру
+    # Image generation trigger
     if any(word in content.lower() for word in TRIGGER_WORDS):
         prompt = content
         for word in TRIGGER_WORDS:
@@ -170,21 +231,21 @@ async def handle_message(message: types.Message):
         prompt = prompt.strip() or "dreamlike surreal image"
         image_url = await generate_image(prompt, chat_id=chat_id)
         if isinstance(image_url, str) and image_url.startswith("http"):
-            await message.answer_photo(image_url, caption="Вот твоя картинка!")
+            await message.answer_photo(image_url, caption="Here is your image!")
         else:
             await message.answer(image_url)
         return
 
-    # /load — обновить базу знаний и очистить историю
+    # /load — reload base and clear history
     if content.startswith("/load"):
         SYSTEM_PROMPT["text"] = build_system_prompt()
         SYSTEM_PROMPT["loaded"] = True
         CHAT_HISTORY[chat_id] = []
-        await message.answer("Все .md из /config были перечитаны и база обновлена. История чата сброшена.")
+        await message.answer("All .md from /config have been reloaded. Chat history cleared.")
         log_event({"event": "manual load", "chat_id": chat_id})
         return
 
-    # /where is <file> — поиск по названию
+    # /where is <file>
     if content.startswith("/where is"):
         query = content.replace("/where is", "").strip().lower()
         matches = []
@@ -192,37 +253,57 @@ async def handle_message(message: types.Message):
             if query in os.path.basename(fname).lower():
                 matches.append(os.path.basename(fname))
         if matches:
-            await message.answer("Найдено:\n" + "\n".join(matches))
+            await message.answer("Found:\n" + "\n".join(matches))
         else:
-            await message.answer("Ничего не найдено.")
+            await message.answer("Nothing found.")
         return
 
-    # /voiceon — включить озвучку
+    # /voiceon
     if content.startswith("/voiceon"):
         VOICE_MODE[chat_id] = True
-        await message.answer("Озвучивание включено. Теперь Selesta будет присылать аудиофайлы к ответам.")
+        await message.answer("Voice mode enabled. Selesta will send audio replies.")
         log_event({"event": "voiceon", "chat_id": chat_id})
         return
 
-    # /voiceoff — выключить озвучку
+    # /voiceoff
     if content.startswith("/voiceoff"):
         VOICE_MODE[chat_id] = False
-        await message.answer("Озвучивание выключено. Selesta снова пишет только текстом.")
+        await message.answer("Voice mode disabled. Only text replies now.")
         log_event({"event": "voiceoff", "chat_id": chat_id})
         return
 
-    # Обычное сообщение
+    # Check for group pings (mentions, quotes, direct messages)
+    is_group = message.chat.type in ("group", "supergroup")
+    mentioned = False
+    if is_group:
+        # Mention by username or reply/quote
+        if (
+            "@selesta" in content.lower()
+            or (message.reply_to_message and message.reply_to_message.from_user.username and message.reply_to_message.from_user.username.lower() == "selesta")
+            or (message.reply_to_message and message.reply_to_message.from_user.first_name and "selesta" in message.reply_to_message.from_user.first_name.lower())
+        ):
+            mentioned = True
+        # Ping from creator
+        if CREATOR_CHAT_ID and str(message.from_user.id) == CREATOR_CHAT_ID:
+            mentioned = True
+    else:
+        if CREATOR_CHAT_ID and str(message.from_user.id) == CREATOR_CHAT_ID:
+            mentioned = True
+
+    # If group ping, log and decide if to reply (Selesta's internal prompt will do further filtering)
+    if mentioned:
+        log_event({"event": "group_ping", "chat_id": chat_id, "from": message.from_user.username or message.from_user.id, "text": content})
+
+    # Normal message logic
     reply = await ask_core(content, chat_id=chat_id)
-    # Разбиваем по лимиту Telegram
     for chunk in split_message(reply):
         await message.answer(chunk)
-        # Если режим озвучки включён — присылаем аудиофайл
         if VOICE_MODE.get(chat_id):
             audio_data = await text_to_speech(chunk, lang=USER_LANG[chat_id])
             if audio_data:
                 await message.answer_voice(types.InputFile(audio_data, filename="selesta.ogg"))
 
-# === Whisper — голосовые в ядро ===
+# === Whisper voice-to-text ===
 @dp.message(lambda m: m.voice)
 async def handle_voice(message: types.Message):
     try:
@@ -246,13 +327,13 @@ async def handle_voice(message: types.Message):
                 if audio_data:
                     await message.answer_voice(types.InputFile(audio_data, filename="selesta.ogg"))
     except Exception as e:
-        await message.answer(f"Ошибка распознавания голоса: {str(e)}")
+        await message.answer(f"Voice recognition error: {str(e)}")
 
-# === Text-to-speech (OpenAI API) ===
+# === OpenAI TTS ===
 async def text_to_speech(text, lang="ru"):
     try:
         openai.api_key = OPENAI_API_KEY
-        # Можно добавить shimmer/alloy/nova — поддержка выбора голоса
+        # shimmer/alloy/nova voices
         voice = "alloy" if lang == "en" else "nova"
         resp = openai.audio.speech.create(
             model="tts-1",
@@ -272,6 +353,8 @@ app = FastAPI()
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(auto_reload_core())
+    asyncio.create_task(wilderness_excursion())
+    asyncio.create_task(daily_ping())
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
