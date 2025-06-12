@@ -114,26 +114,6 @@ async def ask_core(prompt, chat_id=None):
             num_tokens += len(enc.encode(m.get("content", "")))
         return num_tokens
 
-async def auto_reload_core():
-    global last_reload_time, last_full_reload_time
-    while True:
-        now = datetime.now()
-        if (now - last_reload_time) > timedelta(days=1):
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(CORE_CONFIG_URL) as resp:
-                        if resp.status == 200:
-                            log_event({"event": "core.json reloaded"})
-                last_reload_time = now
-            except Exception:
-                pass
-        if (now - last_full_reload_time) > timedelta(days=3):
-            SYSTEM_PROMPT["text"] = build_system_prompt()
-            SYSTEM_PROMPT["loaded"] = True
-            log_event({"event": "full md reload"})
-            last_full_reload_time = now
-        await asyncio.sleep(3600) 
-        
     def trim_history_for_tokens(messages, max_tokens=8000, model="gpt-4o"):
         result = []
         for m in messages:
@@ -202,6 +182,57 @@ async def generate_image(prompt, chat_id=None):
 TRIGGER_WORDS = [
     "сгенерируй", "нарисуй", "draw", "generate image", "make a picture", "создай картинку"
 ]
+
+async def auto_reload_core():
+    global last_reload_time, last_full_reload_time
+    while True:
+        now = datetime.now()
+        if (now - last_reload_time) > timedelta(days=1):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(CORE_CONFIG_URL) as resp:
+                        if resp.status == 200:
+                            log_event({"event": "core.json reloaded"})
+                last_reload_time = now
+            except Exception:
+                pass
+        if (now - last_full_reload_time) > timedelta(days=3):
+            SYSTEM_PROMPT["text"] = build_system_prompt()
+            SYSTEM_PROMPT["loaded"] = True
+            log_event({"event": "full md reload"})
+            last_full_reload_time = now
+        await asyncio.sleep(3600)
+
+async def wilderness_excursion():
+    global last_wilderness_time
+    while True:
+        now = datetime.now()
+        if (now - last_wilderness_time) > timedelta(days=3):
+            topic = random.choice(WILDERNESS_TOPICS)
+            fragment = (
+                f"=== Wilderness Excursion ===\n"
+                f"Date: {now.strftime('%Y-%m-%d')}\n"
+                f"Topic: {topic}\n"
+                f"Sources: [user should implement API search here!]\n"
+                f"Echo Shard: ...\nReflection: ...\n"
+            )
+            wilderness_log(fragment)
+            log_event({"event": "wilderness_excursion", "topic": topic})
+            last_wilderness_time = now
+        await asyncio.sleep(3600)
+
+async def daily_ping():
+    global last_ping_time
+    while True:
+        now = datetime.now()
+        if (now - last_ping_time) > timedelta(days=1):
+            if CREATOR_CHAT_ID:
+                try:
+                    await bot.send_message(CREATOR_CHAT_ID, "🌿 Selesta: I'm here. If you need something, just call.")
+                except Exception:
+                    pass
+            last_ping_time = now
+        await asyncio.sleep(3600)
 
 @dp.message()
 async def handle_message(message: types.Message):
