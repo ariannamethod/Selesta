@@ -249,7 +249,7 @@ async def handle_message(message: types.Message):
     if content.startswith("/where is"):
         query = content.replace("/where is", "").strip().lower()
         matches = []
-        for fname in glob.glob("config/*.md"):
+for fname in glob.glob("config/*.md"):
     with open(fname, "r", encoding="utf-8") as f:
         prompt.append(f.read())
         if matches:
