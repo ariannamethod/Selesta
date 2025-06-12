@@ -7,3 +7,4 @@ pinecone
 python-dotenv
 feedparser
 pypdf
+tiktoken
