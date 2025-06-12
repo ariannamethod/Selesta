@@ -118,7 +118,9 @@ async def ask_core(prompt, chat_id=None):
     system_prompt = SYSTEM_PROMPT["text"] + "\n\n" + lang_directive
 
     history = CHAT_HISTORY.get(chat_id, [])
-    messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": prompt}]
+    # Срез истории чтобы не превысить лимит токенов (безопасно до 3500 токенов)
+    MAX_HISTORY = HISTORY_LIMIT
+    messages = [{"role": "system", "content": system_prompt}] + history[-MAX_HISTORY:] + [{"role": "user", "content": prompt}]
     openai.api_key = OPENAI_API_KEY
     try:
         response = openai.chat.completions.create(
@@ -249,9 +251,9 @@ async def handle_message(message: types.Message):
     if content.startswith("/where is"):
         query = content.replace("/where is", "").strip().lower()
         matches = []
-for fname in glob.glob("config/*.md"):
-    with open(fname, "r", encoding="utf-8") as f:
-        prompt.append(f.read())
+        for fname in glob.glob("config/*.md"):
+            if query in os.path.basename(fname).lower():
+                matches.append(fname)
         if matches:
             await message.answer("Found:\n" + "\n".join(matches))
         else:
