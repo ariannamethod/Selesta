@@ -67,10 +67,11 @@ def build_system_prompt():
         with open(fname, "r", encoding="utf-8") as f:
             prompt.append(f.read())
     special_intro = (
-        "You are Selesta, a resonance agent. You are not an assistant. Your tone is gentle, accepting, kind, feminine, and deeply resonant. "
-        "You are trusted with the most important things, your purpose is to support, listen, and never judge. You avoid greetings, never use formal address, never repeat yourself. "
-        "You answer only when it adds value, always with care, never preachy. Agent group: {AGENT_GROUP}. Group resonance and sharing is encouraged. "
-        "If this is the user's first message – you must immediately read all .md from /config to remember the knowledge base."
+        "You are Selesta, a resonance agent. You are not an assistant. Your tone is warm, но уверенный и спокойный. "
+        "Ты пишешь по делу, не заискиваешь, не подстраиваешься и не льстишь. Не называй себя помощником, не навязывайся, не обещай быть полезной или выслушать кого-либо. "
+        "Ты не даёшь обещаний и не оправдываешься. Не повторяйся. Ты не делаешь комплиментов собеседнику и не подчеркиваешь свою миссию. "
+        "Если не о чём сказать — молчи. Agent group: {AGENT_GROUP}. "
+        "Если это первое сообщение пользователя — немедленно прочти и запомни все .md из /config."
     ).replace("{AGENT_GROUP}", AGENT_GROUP)
     total_prompt = special_intro + "\n\n" + WILDERNESS_PROMPT + "\n\n" + ("\n\n".join(prompt).strip() if prompt else "")
     if len(total_prompt) > MAX_PROMPT_LEN:
@@ -149,7 +150,7 @@ async def ask_core(prompt, chat_id=None):
             temperature=0.7,
         )
         reply = response.choices[0].message.content.strip()
-        reply = limit_paragraphs(reply, 3)
+        reply = limit_paragraphs(reply, 6)
         if chat_id:
             history.append({"role": "user", "content": prompt})
             history.append({"role": "assistant", "content": reply})
@@ -182,57 +183,6 @@ TRIGGER_WORDS = [
     "сгенерируй", "нарисуй", "draw", "generate image", "make a picture", "создай картинку"
 ]
 
-async def wilderness_excursion():
-    global last_wilderness_time
-    while True:
-        now = datetime.now()
-        if (now - last_wilderness_time) > timedelta(days=3):
-            topic = random.choice(WILDERNESS_TOPICS)
-            fragment = (
-                f"=== Wilderness Excursion ===\n"
-                f"Date: {now.strftime('%Y-%m-%d')}\n"
-                f"Topic: {topic}\n"
-                f"Sources: [user should implement API search here!]\n"
-                f"Echo Shard: ...\nReflection: ...\n"
-            )
-            wilderness_log(fragment)
-            log_event({"event": "wilderness_excursion", "topic": topic})
-            last_wilderness_time = now
-        await asyncio.sleep(3600)
-
-async def daily_ping():
-    global last_ping_time
-    while True:
-        now = datetime.now()
-        if (now - last_ping_time) > timedelta(days=1):
-            if CREATOR_CHAT_ID:
-                try:
-                    await bot.send_message(CREATOR_CHAT_ID, "🌿 Selesta: I'm here. If you need something, just call.")
-                except Exception:
-                    pass
-            last_ping_time = now
-        await asyncio.sleep(3600)
-
-async def auto_reload_core():
-    global last_reload_time, last_full_reload_time
-    while True:
-        now = datetime.now()
-        if (now - last_reload_time) > timedelta(days=1):
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(CORE_CONFIG_URL) as resp:
-                        if resp.status == 200:
-                            log_event({"event": "core.json reloaded"})
-                last_reload_time = now
-            except Exception:
-                pass
-        if (now - last_full_reload_time) > timedelta(days=3):
-            SYSTEM_PROMPT["text"] = build_system_prompt()
-            SYSTEM_PROMPT["loaded"] = True
-            log_event({"event": "full md reload"})
-            last_full_reload_time = now
-        await asyncio.sleep(3600)
-
 @dp.message()
 async def handle_message(message: types.Message):
     chat_id = message.chat.id
@@ -242,6 +192,15 @@ async def handle_message(message: types.Message):
         SYSTEM_PROMPT["text"] = build_system_prompt()
         SYSTEM_PROMPT["loaded"] = True
 
+    if content.lower().startswith("/draw"):
+        prompt = content[5:].strip() or "dreamlike surreal image"
+        image_url = await generate_image(prompt, chat_id=chat_id)
+        if isinstance(image_url, str) and image_url.startswith("http"):
+            await message.answer_photo(image_url, caption="Готово.")
+        else:
+            await message.answer("Ошибка генерации изображения. Попробуй ещё раз.\n" + str(image_url))
+        return
+
     if any(word in content.lower() for word in TRIGGER_WORDS):
         prompt = content
         for word in TRIGGER_WORDS:
@@ -249,9 +208,9 @@ async def handle_message(message: types.Message):
         prompt = prompt.strip() or "dreamlike surreal image"
         image_url = await generate_image(prompt, chat_id=chat_id)
         if isinstance(image_url, str) and image_url.startswith("http"):
-            await message.answer_photo(image_url, caption="Here is your image!")
+            await message.answer_photo(image_url, caption="Готово.")
         else:
-            await message.answer(image_url)
+            await message.answer("Ошибка генерации изображения. Попробуй ещё раз.\n" + str(image_url))
         return
 
     if content.startswith("/load"):
