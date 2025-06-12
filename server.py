@@ -150,7 +150,6 @@ def wilderness_log(fragment):
 
 async def ask_core(prompt, chat_id=None, model_name=None):
     def count_tokens(messages, model):
-        # gpt-4o — всегда поддерживает эту токенизацию
         enc = tiktoken.encoding_for_model("gpt-4o")
         num_tokens = 0
         for m in messages:
