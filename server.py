@@ -250,8 +250,8 @@ async def handle_message(message: types.Message):
         query = content.replace("/where is", "").strip().lower()
         matches = []
         for fname in glob.glob("config/*.md"):
-            if query in os.path.basename(fname).lower():
-                matches.append(os.path.basename(fname))
+    with open(fname, "r", encoding="utf-8") as f:
+        prompt.append(f.read())
         if matches:
             await message.answer("Found:\n" + "\n".join(matches))
         else:
