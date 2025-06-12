@@ -24,15 +24,18 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CORE_CONFIG_URL = os.getenv("CORE_CONFIG_URL", "https://selesta.ariannamethod.me/core.json")
 AGENT_GROUP = os.getenv("GROUP_ID", "SELESTA-CORE")
-MODEL_NAME = "gpt-4o"
 CREATOR_CHAT_ID = os.getenv("CREATOR_CHAT_ID")
 
 bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(bot=bot)
 
-CHAT_HISTORY = {}  # {chat_id: [{"role":..., "content":...}]}
-USER_LANG = {}     # {chat_id: "ru"/"en"}
-VOICE_MODE = {}    # {chat_id: True/False}
+# ---- User settings ----
+USER_MODEL = {}         # {chat_id: "gpt-4o"|"gpt-4.5-preview"}
+USER_AUDIO_MODE = {}    # {chat_id: "whisper"|"gpt-4o"}
+USER_VOICE_MODE = {}    # {chat_id: True/False}
+USER_LANG = {}          # {chat_id: "ru"/"en"}
+CHAT_HISTORY = {}       # {chat_id: [{"role":..., "content":...}]}
+
 SYSTEM_PROMPT = {"text": None, "loaded": False}
 MAX_HISTORY_MESSAGES = 6
 MAX_PROMPT_LEN = 120000  # расширено!
@@ -111,8 +114,8 @@ def wilderness_log(fragment):
     except Exception:
         pass
 
-async def ask_core(prompt, chat_id=None):
-    def count_tokens(messages, model="gpt-4o"):
+async def ask_core(prompt, chat_id=None, model_name=None):
+    def count_tokens(messages, model):
         enc = tiktoken.encoding_for_model(model)
         num_tokens = 0
         for m in messages:
@@ -120,7 +123,7 @@ async def ask_core(prompt, chat_id=None):
             num_tokens += len(enc.encode(m.get("content", "")))
         return num_tokens
 
-    def trim_history_for_tokens(messages, max_tokens=120000, model="gpt-4o"):
+    def trim_history_for_tokens(messages, max_tokens, model):
         result = []
         for m in messages:
             result.append(m)
@@ -143,14 +146,15 @@ async def ask_core(prompt, chat_id=None):
     history = CHAT_HISTORY.get(chat_id, [])
     history = history[-MAX_HISTORY_MESSAGES*2:]
 
+    model = model_name or USER_MODEL.get(chat_id, "gpt-4o")
     messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": prompt}]
-    messages = trim_history_for_tokens(messages, max_tokens=120000, model=MODEL_NAME)
-    print("TOKENS in prompt:", count_tokens(messages, MODEL_NAME))
+    messages = trim_history_for_tokens(messages, max_tokens=120000, model=model)
+    print("TOKENS in prompt:", count_tokens(messages, model))
 
     openai.api_key = OPENAI_API_KEY
     try:
         response = openai.chat.completions.create(
-            model=MODEL_NAME,
+            model=model,
             messages=messages,
             max_tokens=700,
             temperature=0.7,
@@ -163,7 +167,7 @@ async def ask_core(prompt, chat_id=None):
             history = trim_history_for_tokens(
                 [{"role": "system", "content": system_prompt}] + history,
                 max_tokens=120000,
-                model=MODEL_NAME
+                model=model
             )[1:]
             CHAT_HISTORY[chat_id] = history
         return reply
@@ -240,9 +244,40 @@ async def daily_ping():
         await asyncio.sleep(3600)
 
 def fuzzy_match(a, b):
-    # Возвращает коэффициент схожести (0..1)
     return difflib.SequenceMatcher(None, a, b).ratio()
 
+# --- COMMAND HANDLERS ---
+@dp.message(lambda m: m.text and m.text.strip().lower() in ("/model 4o", "/model gpt-4o"))
+async def set_model_4o(message: types.Message):
+    USER_MODEL[message.chat.id] = "gpt-4o"
+    await message.answer("Теперь используется модель GPT-4o.")
+
+@dp.message(lambda m: m.text and m.text.strip().lower() in ("/model 4.5", "/model gpt-4.5", "/model gpt-4.5-preview"))
+async def set_model_45(message: types.Message):
+    USER_MODEL[message.chat.id] = "gpt-4.5-preview"
+    await message.answer("Теперь используется модель GPT-4.5-preview.")
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/audio4o")
+async def set_audio4o(message: types.Message):
+    USER_AUDIO_MODE[message.chat.id] = "gpt-4o"
+    await message.answer("Голосовой режим переключен на gpt-4o-audio-preview (мультимодальный).")
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/whisperon")
+async def set_whisper(message: types.Message):
+    USER_AUDIO_MODE[message.chat.id] = "whisper"
+    await message.answer("Голосовой режим переключен на Whisper (speech-to-text).")
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceon")
+async def set_voiceon(message: types.Message):
+    USER_VOICE_MODE[message.chat.id] = True
+    await message.answer("Voice mode enabled. Selesta will send audio replies.")
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceoff")
+async def set_voiceoff(message: types.Message):
+    USER_VOICE_MODE[message.chat.id] = False
+    await message.answer("Voice mode disabled. Only text replies now.")
+
+# --- MAIN TEXT HANDLER ---
 @dp.message()
 async def handle_message(message: types.Message):
     chat_id = message.chat.id
@@ -294,18 +329,6 @@ async def handle_message(message: types.Message):
             await message.answer("Nothing found.")
         return
 
-    if content.startswith("/voiceon"):
-        VOICE_MODE[chat_id] = True
-        await message.answer("Voice mode enabled. Selesta will send audio replies.")
-        log_event({"event": "voiceon", "chat_id": chat_id})
-        return
-
-    if content.startswith("/voiceoff"):
-        VOICE_MODE[chat_id] = False
-        await message.answer("Voice mode disabled. Only text replies now.")
-        log_event({"event": "voiceoff", "chat_id": chat_id})
-        return
-
     is_group = message.chat.type in ("group", "supergroup")
     mentioned = False
     if is_group:
@@ -324,42 +347,81 @@ async def handle_message(message: types.Message):
     if mentioned:
         log_event({"event": "group_ping", "chat_id": chat_id, "from": message.from_user.username or message.from_user.id, "text": content})
 
-    reply = await ask_core(content, chat_id=chat_id)
+    model = USER_MODEL.get(chat_id, "gpt-4o")
+    reply = await ask_core(content, chat_id=chat_id, model_name=model)
     for chunk in split_message(reply):
         await message.answer(chunk)
-        if VOICE_MODE.get(chat_id):
+        if USER_VOICE_MODE.get(chat_id):
             audio_data = await text_to_speech(chunk, lang=USER_LANG[chat_id])
             if audio_data:
                 await message.answer_voice(types.InputFile(audio_data, filename="selesta.ogg"))
 
+# --- VOICE HANDLER: Whisper и gpt-4o-аудио ---
 @dp.message(lambda m: m.voice)
 async def handle_voice(message: types.Message):
+    chat_id = message.chat.id
+    mode = USER_AUDIO_MODE.get(chat_id, "whisper")
+    file = await message.bot.download(message.voice.file_id)
+    fname = "voice.ogg"
+    with open(fname, "wb") as f:
+        f.write(file.read())
+
     try:
-        openai.api_key = OPENAI_API_KEY
-        file = await message.bot.download(message.voice.file_id)
-        fname = "voice.ogg"
-        with open(fname, "wb") as f:
-            f.write(file.read())
-        with open(fname, "rb") as audio_file:
-            transcript = openai.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
+        if mode == "whisper":
+            # Распознавание через Whisper (Speech to Text)
+            with open(fname, "rb") as audio_file:
+                transcript = openai.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                )
+            text = transcript.text.strip()
+            reply = await ask_core(text, chat_id=chat_id)
+            for chunk in split_message(reply):
+                await message.answer(chunk)
+                if USER_VOICE_MODE.get(chat_id):
+                    audio_data = await text_to_speech(chunk, lang=USER_LANG[chat_id])
+                    if audio_data:
+                        await message.answer_voice(types.InputFile(audio_data, filename="selesta.ogg"))
+        elif mode == "gpt-4o":
+            # Мультимодальный анализ через gpt-4o-audio-preview
+            with open(fname, "rb") as audio_file:
+                audio_b64 = base64.b64encode(audio_file.read()).decode("utf-8")
+            response = openai.chat.completions.create(
+                model="gpt-4o-audio-preview",
+                modalities=["text", "audio"],
+                audio={"voice": "alloy", "format": "wav"},
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Что содержится на этой аудиозаписи?"},
+                            {"type": "input_audio", "input_audio": {"data": audio_b64, "format": "ogg"}}
+                        ]
+                    }
+                ],
+                store=True,
             )
-        text = transcript.text.strip()
-        chat_id = message.chat.id
-        reply = await ask_core(text, chat_id=chat_id)
-        for chunk in split_message(reply):
-            await message.answer(chunk)
-            if VOICE_MODE.get(chat_id):
-                audio_data = await text_to_speech(chunk, lang=USER_LANG[chat_id])
-                if audio_data:
-                    await message.answer_voice(types.InputFile(audio_data, filename="selesta.ogg"))
+            answer = response.choices[0].message.content
+            await message.answer(answer)
+            if hasattr(response.choices[0].message, "audio"):
+                audio_data = response.choices[0].message.audio.data
+                audio_bytes = base64.b64decode(audio_data)
+                with open("gpt4o_audio_reply.wav", "wb") as f:
+                    f.write(audio_bytes)
+                await message.answer_voice(types.InputFile("gpt4o_audio_reply.wav", filename="gpt4o_audio_reply.wav"))
     except Exception as e:
-        await message.answer(f"Voice recognition error: {str(e)}")
+        await message.answer(f"Voice/audio error: {str(e)}")
 
 @dp.message(lambda m: m.photo)
 async def handle_photo(message: types.Message):
     await message.answer("Я получила фотографию. Если хочешь — могу реализовать распознавание или описание изображения (Vision).")
+
+# --- PDF/файлы --- (псевдокод, включи если нужно)
+# @dp.message(lambda m: m.document and m.document.mime_type == "application/pdf")
+# async def handle_pdf(message: types.Message):
+#     file_info = await message.bot.get_file(message.document.file_id)
+#     file_path = file_info.file_path
+#     await message.answer("PDF получен — могу отправить его в OpenAI для анализа (см. документацию).")
 
 async def text_to_speech(text, lang="ru"):
     try:
