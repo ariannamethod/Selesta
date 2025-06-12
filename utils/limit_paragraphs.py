@@ -1,11 +1,5 @@
-def limit_paragraphs(text, max_paragraphs=6):
-    paragraphs = text.split('\n')
-    limited = []
-    count = 0
-    for p in paragraphs:
-        if p.strip():
-            count += 1
-            limited.append(p)
-        if count >= max_paragraphs:
-            break
-    return '\n'.join(limited)
+def limit_paragraphs(text, max_paragraphs=4):
+    """Обрезает текст до N абзацев (по пустой строке или переводу строки)."""
+    paras = [p.strip() for p in text.replace('\r', '').split('\n\n') if p.strip()]
+    limited = paras[:max_paragraphs]
+    return '\n\n'.join(limited)
