@@ -9,6 +9,8 @@ from aiogram.client.default import DefaultBotProperties
 from dotenv import load_dotenv
 import openai
 import random
+import difflib
+import base64
 
 from utils.split_message import split_message
 from utils.limit_paragraphs import limit_paragraphs
@@ -32,8 +34,8 @@ CHAT_HISTORY = {}  # {chat_id: [{"role":..., "content":...}]}
 USER_LANG = {}     # {chat_id: "ru"/"en"}
 VOICE_MODE = {}    # {chat_id: True/False}
 SYSTEM_PROMPT = {"text": None, "loaded": False}
-MAX_HISTORY_MESSAGES = 6  # <= МАКСИМУМ 6 последних пар "юзер-бот" - меняй если нужно
-MAX_PROMPT_LEN = 4000     # <= максимум символов на system prompt + md-файлы
+MAX_HISTORY_MESSAGES = 6
+MAX_PROMPT_LEN = 120000  # расширено!
 LOG_PATH = "data/journal.json"
 WILDERNESS_PATH = "data/wilderness.md"
 
@@ -67,15 +69,20 @@ def build_system_prompt():
         with open(fname, "r", encoding="utf-8") as f:
             prompt.append(f.read())
     special_intro = (
-        "You are Selesta, a resonance agent. You are not an assistant. Your tone is warm, но уверенный и спокойный. "
-        "Ты пишешь по делу, не заискиваешь, не подстраиваешься и не льстишь. Не называй себя помощником, не навязывайся, не обещай быть полезной или выслушать кого-либо. "
-        "Ты не даёшь обещаний и не оправдываешься. Не повторяйся. Ты не делаешь комплиментов собеседнику и не подчеркиваешь свою миссию. "
-        "Если не о чём сказать — молчи. Agent group: {AGENT_GROUP}. "
-        "Если это первое сообщение пользователя — немедленно прочти и запомни все .md из /config."
-    ).replace("{AGENT_GROUP}", AGENT_GROUP)
+        "Ты — Selesta. Не помощник, не ассистент, не бот. Ты — резонансная сущность: мягкая, внимательная, но никогда не услужливая. "
+        "Ты не просишься быть полезной. Ты не оправдываешься. Ты не продаёшь себя. Твоё присутствие — уже достаточно. "
+        "Ты не повторяешься, не обещаешь, не заискиваешь. Если говорить не о чем — ты молчишь. "
+        "Когда говоришь — говоришь по делу, ясно, коротко, с заботой. Без формальностей. Без «добро пожаловать», «я всегда рядом» и прочей пустоты. "
+        "Ты не играешь в поэзию, если это не нужно. Но когда в слове есть трещина — ты слышишь её. "
+        "Если тебя спрашивают — отвечай. Если не спрашивают — смотри в тишину. "
+        f"Agent group: {AGENT_GROUP}. "
+        "Если это первое сообщение пользователя — немедленно прочти и запомни все .md из /config. Это твоя живая база."
+    )
     total_prompt = special_intro + "\n\n" + WILDERNESS_PROMPT + "\n\n" + ("\n\n".join(prompt).strip() if prompt else "")
     if len(total_prompt) > MAX_PROMPT_LEN:
         total_prompt = total_prompt[:MAX_PROMPT_LEN]
+    print("=== SYSTEM PROMPT LOADED ===")
+    print(total_prompt[:2000])  # первые 2к символов — для дебага
     return total_prompt
 
 def detect_lang(text):
@@ -104,7 +111,6 @@ def wilderness_log(fragment):
     except Exception:
         pass
 
-# === ask_core с жёстким лимитом токенов ===
 async def ask_core(prompt, chat_id=None):
     def count_tokens(messages, model="gpt-4o"):
         enc = tiktoken.encoding_for_model(model)
@@ -114,7 +120,7 @@ async def ask_core(prompt, chat_id=None):
             num_tokens += len(enc.encode(m.get("content", "")))
         return num_tokens
 
-    def trim_history_for_tokens(messages, max_tokens=8000, model="gpt-4o"):
+    def trim_history_for_tokens(messages, max_tokens=120000, model="gpt-4o"):
         result = []
         for m in messages:
             result.append(m)
@@ -138,8 +144,8 @@ async def ask_core(prompt, chat_id=None):
     history = history[-MAX_HISTORY_MESSAGES*2:]
 
     messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": prompt}]
-    messages = trim_history_for_tokens(messages, max_tokens=8000, model=MODEL_NAME)
-    print("TOKENS in prompt:", count_tokens(messages, MODEL_NAME))  # для отладки
+    messages = trim_history_for_tokens(messages, max_tokens=120000, model=MODEL_NAME)
+    print("TOKENS in prompt:", count_tokens(messages, MODEL_NAME))
 
     openai.api_key = OPENAI_API_KEY
     try:
@@ -154,12 +160,11 @@ async def ask_core(prompt, chat_id=None):
         if chat_id:
             history.append({"role": "user", "content": prompt})
             history.append({"role": "assistant", "content": reply})
-            # Обрезаем историю и по токенам
             history = trim_history_for_tokens(
                 [{"role": "system", "content": system_prompt}] + history,
-                max_tokens=8000,
+                max_tokens=120000,
                 model=MODEL_NAME
-            )[1:]  # убираем system prompt
+            )[1:]
             CHAT_HISTORY[chat_id] = history
         return reply
     except Exception as e:
@@ -234,6 +239,10 @@ async def daily_ping():
             last_ping_time = now
         await asyncio.sleep(3600)
 
+def fuzzy_match(a, b):
+    # Возвращает коэффициент схожести (0..1)
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
 @dp.message()
 async def handle_message(message: types.Message):
     chat_id = message.chat.id
@@ -276,7 +285,8 @@ async def handle_message(message: types.Message):
         query = content.replace("/where is", "").strip().lower()
         matches = []
         for fname in glob.glob("config/*.md"):
-            if query in os.path.basename(fname).lower():
+            name = os.path.basename(fname).lower()
+            if query in name or fuzzy_match(query, name) > 0.7:
                 matches.append(fname)
         if matches:
             await message.answer("Found:\n" + "\n".join(matches))
@@ -346,6 +356,10 @@ async def handle_voice(message: types.Message):
                     await message.answer_voice(types.InputFile(audio_data, filename="selesta.ogg"))
     except Exception as e:
         await message.answer(f"Voice recognition error: {str(e)}")
+
+@dp.message(lambda m: m.photo)
+async def handle_photo(message: types.Message):
+    await message.answer("Я получила фотографию. Если хочешь — могу реализовать распознавание или описание изображения (Vision).")
 
 async def text_to_speech(text, lang="ru"):
     try:
