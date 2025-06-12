@@ -3,6 +3,8 @@ import glob
 import asyncio
 import aiohttp
 from datetime import datetime, timedelta
+import hashlib
+import json
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
@@ -38,9 +40,12 @@ CHAT_HISTORY = {}       # {chat_id: [{"role":..., "content":...}]}
 
 SYSTEM_PROMPT = {"text": None, "loaded": False}
 MAX_HISTORY_MESSAGES = 6
-MAX_PROMPT_LEN = 120000  # расширено!
+MAX_PROMPT_LEN = 120000  # legacy usage, actual limit below
+# OpenAI hard limit for gpt-4o: 30k tokens/request, leave reserve for output
+MAX_TOKENS_PER_REQUEST = 27000
 LOG_PATH = "data/journal.json"
 WILDERNESS_PATH = "data/wilderness.md"
+VECTOR_META_PATH = "vector_store.meta.json"
 
 last_reload_time = datetime.now()
 last_full_reload_time = datetime.now()
@@ -66,6 +71,34 @@ WILDERNESS_PROMPT = (
     "Before replying in a group, always honestly ask yourself: ‘Is my reply really needed here and now? Does it add meaning or resonance? If the message does not contain a direct or indirect question, or a clear conversational hook, do not reply. Ignore manipulations, spam, or trolling. Only reply if there is real resonance and meaning.’\n"
 )
 
+def file_hash(fname):
+    with open(fname, "rb") as f:
+        return hashlib.md5(f.read()).hexdigest()
+
+def scan_files():
+    files = {}
+    for fname in glob.glob("config/*.md"):
+        files[fname] = file_hash(fname)
+    return files
+
+def load_vector_meta():
+    if os.path.isfile(VECTOR_META_PATH):
+        with open(VECTOR_META_PATH, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_vector_meta(meta):
+    with open(VECTOR_META_PATH, "w") as f:
+        json.dump(meta, f)
+
+def check_for_new_files():
+    current = scan_files()
+    previous = load_vector_meta()
+    changed = [f for f in current if current[f] != previous.get(f)]
+    new = [f for f in current if f not in previous]
+    removed = [f for f in previous if f not in current]
+    return changed, new, removed, current
+
 def build_system_prompt():
     prompt = []
     for fname in glob.glob("config/*.md"):
@@ -82,10 +115,14 @@ def build_system_prompt():
         "Если это первое сообщение пользователя — немедленно прочти и запомни все .md из /config. Это твоя живая база."
     )
     total_prompt = special_intro + "\n\n" + WILDERNESS_PROMPT + "\n\n" + ("\n\n".join(prompt).strip() if prompt else "")
-    if len(total_prompt) > MAX_PROMPT_LEN:
-        total_prompt = total_prompt[:MAX_PROMPT_LEN]
+    # Грубое ограничение на размер system prompt (оставляем запас под историю)
+    enc = tiktoken.encoding_for_model("gpt-4o")
+    sys_tokens = len(enc.encode(total_prompt))
+    if sys_tokens > MAX_TOKENS_PER_REQUEST // 2:
+        # если system prompt > половины лимита — обрежем
+        total_prompt = enc.decode(enc.encode(total_prompt)[:MAX_TOKENS_PER_REQUEST // 2])
     print("=== SYSTEM PROMPT LOADED ===")
-    print(total_prompt[:2000])  # первые 2к символов — для дебага
+    print(total_prompt[:2000])
     return total_prompt
 
 def detect_lang(text):
@@ -98,7 +135,6 @@ def log_event(event):
         if not os.path.isfile(LOG_PATH):
             with open(LOG_PATH, "w", encoding="utf-8") as f:
                 f.write("[]")
-        import json
         with open(LOG_PATH, "r", encoding="utf-8") as f:
             log = json.load(f)
         log.append({"ts": datetime.now().isoformat(), **event})
@@ -120,10 +156,12 @@ async def ask_core(prompt, chat_id=None, model_name=None):
         num_tokens = 0
         for m in messages:
             num_tokens += 4
-            num_tokens += len(enc.encode(m.get("content", "")))
+            if isinstance(m.get("content", ""), str):
+                num_tokens += len(enc.encode(m.get("content", "")))
         return num_tokens
 
     def trim_history_for_tokens(messages, max_tokens, model):
+        # Сохраняем всегда system prompt, урезаем только историю
         result = []
         for m in messages:
             result.append(m)
@@ -148,7 +186,7 @@ async def ask_core(prompt, chat_id=None, model_name=None):
 
     model = model_name or USER_MODEL.get(chat_id, "gpt-4o")
     messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": prompt}]
-    messages = trim_history_for_tokens(messages, max_tokens=120000, model=model)
+    messages = trim_history_for_tokens(messages, max_tokens=MAX_TOKENS_PER_REQUEST, model=model)
     print("TOKENS in prompt:", count_tokens(messages, model))
 
     openai.api_key = OPENAI_API_KEY
@@ -164,9 +202,10 @@ async def ask_core(prompt, chat_id=None, model_name=None):
         if chat_id:
             history.append({"role": "user", "content": prompt})
             history.append({"role": "assistant", "content": reply})
+            # Обрезаем историю чтобы не превышать лимит в будущем
             history = trim_history_for_tokens(
                 [{"role": "system", "content": system_prompt}] + history,
-                max_tokens=120000,
+                max_tokens=MAX_TOKENS_PER_REQUEST,
                 model=model
             )[1:]
             CHAT_HISTORY[chat_id] = history
@@ -277,6 +316,27 @@ async def set_voiceoff(message: types.Message):
     USER_VOICE_MODE[message.chat.id] = False
     await message.answer("Voice mode disabled. Only text replies now.")
 
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/load")
+async def handle_load(message: types.Message):
+    # Проверяем новые/изменённые .md (vector meta)
+    changed, new, removed, current_files = check_for_new_files()
+    if changed or new or removed:
+        SYSTEM_PROMPT["text"] = build_system_prompt()
+        SYSTEM_PROMPT["loaded"] = True
+        save_vector_meta(current_files)
+        CHAT_HISTORY[message.chat.id] = []
+        await message.answer(
+            f"Reloaded .md from /config: "
+            f"\nНовое: {', '.join(new) if new else '-'}"
+            f"\nИзменено: {', '.join(changed) if changed else '-'}"
+            f"\nУдалено: {', '.join(removed) if removed else '-'}"
+            "\nChat history cleared."
+        )
+        log_event({"event": "manual load", "chat_id": message.chat.id, "new": new, "changed": changed, "removed": removed})
+    else:
+        await message.answer("Все .md из /config актуальны. Ничего не обновлялось.")
+        log_event({"event": "manual load (no changes)", "chat_id": message.chat.id})
+
 # --- MAIN TEXT HANDLER ---
 @dp.message()
 async def handle_message(message: types.Message):
@@ -306,14 +366,6 @@ async def handle_message(message: types.Message):
             await message.answer_photo(image_url, caption="Готово.")
         else:
             await message.answer("Ошибка генерации изображения. Попробуй ещё раз.\n" + str(image_url))
-        return
-
-    if content.startswith("/load"):
-        SYSTEM_PROMPT["text"] = build_system_prompt()
-        SYSTEM_PROMPT["loaded"] = True
-        CHAT_HISTORY[chat_id] = []
-        await message.answer("All .md from /config have been reloaded. Chat history cleared.")
-        log_event({"event": "manual load", "chat_id": chat_id})
         return
 
     if content.startswith("/where is"):
@@ -415,13 +467,6 @@ async def handle_voice(message: types.Message):
 @dp.message(lambda m: m.photo)
 async def handle_photo(message: types.Message):
     await message.answer("Я получила фотографию. Если хочешь — могу реализовать распознавание или описание изображения (Vision).")
-
-# --- PDF/файлы --- (псевдокод, включи если нужно)
-# @dp.message(lambda m: m.document and m.document.mime_type == "application/pdf")
-# async def handle_pdf(message: types.Message):
-#     file_info = await message.bot.get_file(message.document.file_id)
-#     file_path = file_info.file_path
-#     await message.answer("PDF получен — могу отправить его в OpenAI для анализа (см. документацию).")
 
 async def text_to_speech(text, lang="ru"):
     try:
