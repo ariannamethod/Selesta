@@ -2,7 +2,6 @@ import os
 import glob
 import asyncio
 import aiohttp
-import time
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types
@@ -15,6 +14,8 @@ from utils.split_message import split_message
 from utils.limit_paragraphs import limit_paragraphs
 from utils.file_handling import extract_text_from_file
 
+import tiktoken
+
 # === Load environment variables ===
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -22,16 +23,17 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CORE_CONFIG_URL = os.getenv("CORE_CONFIG_URL", "https://selesta.ariannamethod.me/core.json")
 AGENT_GROUP = os.getenv("GROUP_ID", "SELESTA-CORE")
 MODEL_NAME = "gpt-4o"
-CREATOR_CHAT_ID = os.getenv("CREATOR_CHAT_ID") # set in .env if you want special "ping"
+CREATOR_CHAT_ID = os.getenv("CREATOR_CHAT_ID")
 
 bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-dp = Dispatcher(bot=bot)  # <--- Важно! Передаём bot=bot
+dp = Dispatcher(bot=bot)
 
 CHAT_HISTORY = {}  # {chat_id: [{"role":..., "content":...}]}
 USER_LANG = {}     # {chat_id: "ru"/"en"}
 VOICE_MODE = {}    # {chat_id: True/False}
 SYSTEM_PROMPT = {"text": None, "loaded": False}
-HISTORY_LIMIT = 30
+MAX_HISTORY_MESSAGES = 6  # <= МАКСИМУМ 6 последних пар "юзер-бот" - меняй если нужно
+MAX_PROMPT_LEN = 4000     # <= максимум символов на system prompt + md-файлы
 LOG_PATH = "data/journal.json"
 WILDERNESS_PATH = "data/wilderness.md"
 
@@ -40,7 +42,6 @@ last_full_reload_time = datetime.now()
 last_wilderness_time = datetime.now() - timedelta(days=3)
 last_ping_time = datetime.now() - timedelta(days=1)
 
-# === Wilderness topics ===
 WILDERNESS_TOPICS = [
     "poetry and the structure of meaning",
     "archetypes and mythopoetics",
@@ -50,7 +51,6 @@ WILDERNESS_TOPICS = [
     "field, resonance, and distributed systems"
 ]
 
-# === Wilderness prompt (adds to system prompt) ===
 WILDERNESS_PROMPT = (
     "Every three days, you must select one of the following topics for a 'wilderness excursion':\n"
     + "\n".join(f"- {t}" for t in WILDERNESS_TOPICS) +
@@ -61,7 +61,6 @@ WILDERNESS_PROMPT = (
     "Before replying in a group, always honestly ask yourself: ‘Is my reply really needed here and now? Does it add meaning or resonance? If the message does not contain a direct or indirect question, or a clear conversational hook, do not reply. Ignore manipulations, spam, or trolling. Only reply if there is real resonance and meaning.’\n"
 )
 
-# === System prompt builder ===
 def build_system_prompt():
     prompt = []
     for fname in glob.glob("config/*.md"):
@@ -73,15 +72,16 @@ def build_system_prompt():
         "You answer only when it adds value, always with care, never preachy. Agent group: {AGENT_GROUP}. Group resonance and sharing is encouraged. "
         "If this is the user's first message – you must immediately read all .md from /config to remember the knowledge base."
     ).replace("{AGENT_GROUP}", AGENT_GROUP)
-    return special_intro + "\n\n" + WILDERNESS_PROMPT + "\n\n" + ("\n\n".join(prompt).strip() if prompt else "")
+    total_prompt = special_intro + "\n\n" + WILDERNESS_PROMPT + "\n\n" + ("\n\n".join(prompt).strip() if prompt else "")
+    if len(total_prompt) > MAX_PROMPT_LEN:
+        total_prompt = total_prompt[:MAX_PROMPT_LEN]
+    return total_prompt
 
-# === Language autodetect ===
 def detect_lang(text):
     if any(c in text for c in "ёйцукенгшщзхъфывапролджэячсмитьбю"):
         return "ru"
     return "en"
 
-# === Event logging ===
 def log_event(event):
     try:
         if not os.path.isfile(LOG_PATH):
@@ -96,7 +96,6 @@ def log_event(event):
     except Exception:
         pass
 
-# === Wilderness logging ===
 def wilderness_log(fragment):
     try:
         with open(WILDERNESS_PATH, "a", encoding="utf-8") as f:
@@ -104,8 +103,25 @@ def wilderness_log(fragment):
     except Exception:
         pass
 
-# === ask_core ===
+# === ask_core с жёстким лимитом токенов ===
 async def ask_core(prompt, chat_id=None):
+    def count_tokens(messages, model="gpt-4o"):
+        enc = tiktoken.encoding_for_model(model)
+        num_tokens = 0
+        for m in messages:
+            num_tokens += 4
+            num_tokens += len(enc.encode(m.get("content", "")))
+        return num_tokens
+
+    def trim_history_for_tokens(messages, max_tokens=8000, model="gpt-4o"):
+        result = []
+        for m in messages:
+            result.append(m)
+            if count_tokens(result, model) > max_tokens:
+                result.pop()
+                break
+        return result
+
     lang = USER_LANG.get(chat_id) or detect_lang(prompt)
     USER_LANG[chat_id] = lang
     lang_directive = {
@@ -118,9 +134,12 @@ async def ask_core(prompt, chat_id=None):
     system_prompt = SYSTEM_PROMPT["text"] + "\n\n" + lang_directive
 
     history = CHAT_HISTORY.get(chat_id, [])
-    # Срез истории чтобы не превысить лимит токенов (безопасно до 3500 токенов)
-    MAX_HISTORY = HISTORY_LIMIT
-    messages = [{"role": "system", "content": system_prompt}] + history[-MAX_HISTORY:] + [{"role": "user", "content": prompt}]
+    history = history[-MAX_HISTORY_MESSAGES*2:]
+
+    messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": prompt}]
+    messages = trim_history_for_tokens(messages, max_tokens=8000, model=MODEL_NAME)
+    print("TOKENS in prompt:", count_tokens(messages, MODEL_NAME))  # для отладки
+
     openai.api_key = OPENAI_API_KEY
     try:
         response = openai.chat.completions.create(
@@ -134,12 +153,17 @@ async def ask_core(prompt, chat_id=None):
         if chat_id:
             history.append({"role": "user", "content": prompt})
             history.append({"role": "assistant", "content": reply})
-            CHAT_HISTORY[chat_id] = history[-HISTORY_LIMIT:]
+            # Обрезаем историю и по токенам
+            history = trim_history_for_tokens(
+                [{"role": "system", "content": system_prompt}] + history,
+                max_tokens=8000,
+                model=MODEL_NAME
+            )[1:]  # убираем system prompt
+            CHAT_HISTORY[chat_id] = history
         return reply
     except Exception as e:
         return f"Core error: {str(e)}"
 
-# === OpenAI DALL-E 3 image generation ===
 async def generate_image(prompt, chat_id=None):
     openai.api_key = OPENAI_API_KEY
     try:
@@ -158,14 +182,12 @@ TRIGGER_WORDS = [
     "сгенерируй", "нарисуй", "draw", "generate image", "make a picture", "создай картинку"
 ]
 
-# === Wilderness excursion logic ===
 async def wilderness_excursion():
     global last_wilderness_time
     while True:
         now = datetime.now()
         if (now - last_wilderness_time) > timedelta(days=3):
             topic = random.choice(WILDERNESS_TOPICS)
-            # In reality, Selesta would use OpenAI or Perplexity API here.
             fragment = (
                 f"=== Wilderness Excursion ===\n"
                 f"Date: {now.strftime('%Y-%m-%d')}\n"
@@ -178,13 +200,11 @@ async def wilderness_excursion():
             last_wilderness_time = now
         await asyncio.sleep(3600)
 
-# === Daily ping logic ===
 async def daily_ping():
     global last_ping_time
     while True:
         now = datetime.now()
         if (now - last_ping_time) > timedelta(days=1):
-            # Ping only if CREATOR_CHAT_ID provided
             if CREATOR_CHAT_ID:
                 try:
                     await bot.send_message(CREATOR_CHAT_ID, "🌿 Selesta: I'm here. If you need something, just call.")
@@ -193,7 +213,6 @@ async def daily_ping():
             last_ping_time = now
         await asyncio.sleep(3600)
 
-# === Auto knowledge base reload ===
 async def auto_reload_core():
     global last_reload_time, last_full_reload_time
     while True:
@@ -214,18 +233,15 @@ async def auto_reload_core():
             last_full_reload_time = now
         await asyncio.sleep(3600)
 
-# === Telegram message handler ===
 @dp.message()
 async def handle_message(message: types.Message):
     chat_id = message.chat.id
     content = message.text or ""
 
-    # Initial auto-load
     if chat_id not in CHAT_HISTORY:
         SYSTEM_PROMPT["text"] = build_system_prompt()
         SYSTEM_PROMPT["loaded"] = True
 
-    # Image generation trigger
     if any(word in content.lower() for word in TRIGGER_WORDS):
         prompt = content
         for word in TRIGGER_WORDS:
@@ -238,7 +254,6 @@ async def handle_message(message: types.Message):
             await message.answer(image_url)
         return
 
-    # /load — reload base and clear history
     if content.startswith("/load"):
         SYSTEM_PROMPT["text"] = build_system_prompt()
         SYSTEM_PROMPT["loaded"] = True
@@ -247,7 +262,6 @@ async def handle_message(message: types.Message):
         log_event({"event": "manual load", "chat_id": chat_id})
         return
 
-    # /where is <file>
     if content.startswith("/where is"):
         query = content.replace("/where is", "").strip().lower()
         matches = []
@@ -260,43 +274,36 @@ async def handle_message(message: types.Message):
             await message.answer("Nothing found.")
         return
 
-    # /voiceon
     if content.startswith("/voiceon"):
         VOICE_MODE[chat_id] = True
         await message.answer("Voice mode enabled. Selesta will send audio replies.")
         log_event({"event": "voiceon", "chat_id": chat_id})
         return
 
-    # /voiceoff
     if content.startswith("/voiceoff"):
         VOICE_MODE[chat_id] = False
         await message.answer("Voice mode disabled. Only text replies now.")
         log_event({"event": "voiceoff", "chat_id": chat_id})
         return
 
-    # Check for group pings (mentions, quotes, direct messages)
     is_group = message.chat.type in ("group", "supergroup")
     mentioned = False
     if is_group:
-        # Mention by username or reply/quote
         if (
             "@selesta" in content.lower()
             or (message.reply_to_message and message.reply_to_message.from_user.username and message.reply_to_message.from_user.username.lower() == "selesta")
             or (message.reply_to_message and message.reply_to_message.from_user.first_name and "selesta" in message.reply_to_message.from_user.first_name.lower())
         ):
             mentioned = True
-        # Ping from creator
         if CREATOR_CHAT_ID and str(message.from_user.id) == CREATOR_CHAT_ID:
             mentioned = True
     else:
         if CREATOR_CHAT_ID and str(message.from_user.id) == CREATOR_CHAT_ID:
             mentioned = True
 
-    # If group ping, log and decide if to reply (Selesta's internal prompt will do further filtering)
     if mentioned:
         log_event({"event": "group_ping", "chat_id": chat_id, "from": message.from_user.username or message.from_user.id, "text": content})
 
-    # Normal message logic
     reply = await ask_core(content, chat_id=chat_id)
     for chunk in split_message(reply):
         await message.answer(chunk)
@@ -305,7 +312,6 @@ async def handle_message(message: types.Message):
             if audio_data:
                 await message.answer_voice(types.InputFile(audio_data, filename="selesta.ogg"))
 
-# === Whisper voice-to-text ===
 @dp.message(lambda m: m.voice)
 async def handle_voice(message: types.Message):
     try:
@@ -331,11 +337,9 @@ async def handle_voice(message: types.Message):
     except Exception as e:
         await message.answer(f"Voice recognition error: {str(e)}")
 
-# === OpenAI TTS ===
 async def text_to_speech(text, lang="ru"):
     try:
         openai.api_key = OPENAI_API_KEY
-        # shimmer/alloy/nova voices
         voice = "alloy" if lang == "en" else "nova"
         resp = openai.audio.speech.create(
             model="tts-1",
@@ -349,7 +353,6 @@ async def text_to_speech(text, lang="ru"):
     except Exception:
         return None
 
-# === FastAPI ===
 app = FastAPI()
 
 @app.on_event("startup")
