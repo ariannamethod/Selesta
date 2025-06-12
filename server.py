@@ -114,6 +114,26 @@ async def ask_core(prompt, chat_id=None):
             num_tokens += len(enc.encode(m.get("content", "")))
         return num_tokens
 
+async def auto_reload_core():
+    global last_reload_time, last_full_reload_time
+    while True:
+        now = datetime.now()
+        if (now - last_reload_time) > timedelta(days=1):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(CORE_CONFIG_URL) as resp:
+                        if resp.status == 200:
+                            log_event({"event": "core.json reloaded"})
+                last_reload_time = now
+            except Exception:
+                pass
+        if (now - last_full_reload_time) > timedelta(days=3):
+            SYSTEM_PROMPT["text"] = build_system_prompt()
+            SYSTEM_PROMPT["loaded"] = True
+            log_event({"event": "full md reload"})
+            last_full_reload_time = now
+        await asyncio.sleep(3600) 
+        
     def trim_history_for_tokens(messages, max_tokens=8000, model="gpt-4o"):
         result = []
         for m in messages:
