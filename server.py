@@ -32,7 +32,7 @@ bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(bot=bot)
 
 # ---- User settings ----
-USER_MODEL = {}         # {chat_id: "gpt-4o"|"gpt-4.5-preview"}
+USER_MODEL = {}         # {chat_id: "gpt-4o"}
 USER_AUDIO_MODE = {}    # {chat_id: "whisper"|"gpt-4o"}
 USER_VOICE_MODE = {}    # {chat_id: True/False}
 USER_LANG = {}          # {chat_id: "ru"/"en"}
@@ -115,11 +115,9 @@ def build_system_prompt():
         "Если это первое сообщение пользователя — немедленно прочти и запомни все .md из /config. Это твоя живая база."
     )
     total_prompt = special_intro + "\n\n" + WILDERNESS_PROMPT + "\n\n" + ("\n\n".join(prompt).strip() if prompt else "")
-    # Грубое ограничение на размер system prompt (оставляем запас под историю)
     enc = tiktoken.encoding_for_model("gpt-4o")
     sys_tokens = len(enc.encode(total_prompt))
     if sys_tokens > MAX_TOKENS_PER_REQUEST // 2:
-        # если system prompt > половины лимита — обрежем
         total_prompt = enc.decode(enc.encode(total_prompt)[:MAX_TOKENS_PER_REQUEST // 2])
     print("=== SYSTEM PROMPT LOADED ===")
     print(total_prompt[:2000])
@@ -152,7 +150,8 @@ def wilderness_log(fragment):
 
 async def ask_core(prompt, chat_id=None, model_name=None):
     def count_tokens(messages, model):
-        enc = tiktoken.encoding_for_model(model)
+        # gpt-4o — всегда поддерживает эту токенизацию
+        enc = tiktoken.encoding_for_model("gpt-4o")
         num_tokens = 0
         for m in messages:
             num_tokens += 4
@@ -161,7 +160,6 @@ async def ask_core(prompt, chat_id=None, model_name=None):
         return num_tokens
 
     def trim_history_for_tokens(messages, max_tokens, model):
-        # Сохраняем всегда system prompt, урезаем только историю
         result = []
         for m in messages:
             result.append(m)
@@ -192,17 +190,16 @@ async def ask_core(prompt, chat_id=None, model_name=None):
     openai.api_key = OPENAI_API_KEY
     try:
         response = openai.chat.completions.create(
-            model=model,
+            model="gpt-4o",
             messages=messages,
             max_tokens=700,
             temperature=0.7,
         )
         reply = response.choices[0].message.content.strip()
-        reply = limit_paragraphs(reply, 6)
+        reply = limit_paragraphs(reply, 3)
         if chat_id:
             history.append({"role": "user", "content": prompt})
             history.append({"role": "assistant", "content": reply})
-            # Обрезаем историю чтобы не превышать лимит в будущем
             history = trim_history_for_tokens(
                 [{"role": "system", "content": system_prompt}] + history,
                 max_tokens=MAX_TOKENS_PER_REQUEST,
@@ -289,12 +286,8 @@ def fuzzy_match(a, b):
 @dp.message(lambda m: m.text and m.text.strip().lower() in ("/model 4o", "/model gpt-4o"))
 async def set_model_4o(message: types.Message):
     USER_MODEL[message.chat.id] = "gpt-4o"
-    await message.answer("Теперь используется модель GPT-4o.")
-
-@dp.message(lambda m: m.text and m.text.strip().lower() in ("/model 4.5", "/model gpt-4.5", "/model gpt-4.5-preview"))
-async def set_model_45(message: types.Message):
-    USER_MODEL[message.chat.id] = "gpt-4.5-preview"
-    await message.answer("Теперь используется модель GPT-4.5-preview.")
+    CHAT_HISTORY[message.chat.id] = []
+    await message.answer("Теперь используется модель GPT-4o. История очищена для корректной работы.")
 
 @dp.message(lambda m: m.text and m.text.strip().lower() == "/audio4o")
 async def set_audio4o(message: types.Message):
@@ -318,7 +311,6 @@ async def set_voiceoff(message: types.Message):
 
 @dp.message(lambda m: m.text and m.text.strip().lower() == "/load")
 async def handle_load(message: types.Message):
-    # Проверяем новые/изменённые .md (vector meta)
     changed, new, removed, current_files = check_for_new_files()
     if changed or new or removed:
         SYSTEM_PROMPT["text"] = build_system_prompt()
