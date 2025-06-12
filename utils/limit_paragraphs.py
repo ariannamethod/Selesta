@@ -1,4 +1,4 @@
-def limit_paragraphs(text, max_paragraphs=3):
+def limit_paragraphs(text, max_paragraphs=6):
     paragraphs = text.split('\n')
     limited = []
     count = 0
