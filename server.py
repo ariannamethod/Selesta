@@ -20,6 +20,10 @@ from utils.file_handling import extract_text_from_file
 
 import tiktoken
 
+import re
+import requests
+from bs4 import BeautifulSoup
+
 # === Load environment variables ===
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -280,6 +284,21 @@ async def daily_ping():
 def fuzzy_match(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio()
 
+def extract_text_from_url(url):
+    """Скачивает страницу и возвращает максимум текста для prompt"""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Selesta Agent)"}
+        resp = requests.get(url, timeout=10, headers=headers)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for s in soup(["script", "style", "header", "footer", "nav", "aside"]):
+            s.decompose()
+        text = soup.get_text(separator="\n")
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        result = "\n".join(lines)[:3500]
+        return result
+    except Exception as e:
+        return f"[Ошибка загрузки страницы: {e}]"
+
 # --- COMMAND HANDLERS ---
 @dp.message(lambda m: m.text and m.text.strip().lower() in ("/model 4o", "/model gpt-4o"))
 async def set_model_4o(message: types.Message):
@@ -336,6 +355,13 @@ async def handle_message(message: types.Message):
     if chat_id not in CHAT_HISTORY:
         SYSTEM_PROMPT["text"] = build_system_prompt()
         SYSTEM_PROMPT["loaded"] = True
+
+    # --- Новый блок для ссылок ---
+    url_match = re.search(r'(https?://[^\s]+)', content)
+    if url_match:
+        url = url_match.group(1)
+        url_text = extract_text_from_url(url)
+        content = f"{content}\n\n[Содержимое по ссылке ({url}):]\n{url_text}"
 
     if content.lower().startswith("/draw"):
         prompt = content[5:].strip() or "dreamlike surreal image"
