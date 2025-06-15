@@ -3,9 +3,9 @@ uvicorn
 aiogram==3.*
 aiohttp
 openai
-pinecone
 python-dotenv
 feedparser
 pypdf
 tiktoken
 beautifulsoup4
+pillow
