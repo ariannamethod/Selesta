@@ -20,23 +20,37 @@ from utils.limit_paragraphs import limit_paragraphs
 from utils.file_handling import extract_text_from_file
 
 import tiktoken
-
 import re
 import requests
 from bs4 import BeautifulSoup
 
 # === Load environment variables ===
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 CORE_CONFIG_URL = os.getenv("CORE_CONFIG_URL", "https://selesta.ariannamethod.me/core.json")
 AGENT_GROUP = os.getenv("GROUP_ID", "SELESTA-CORE")
 CREATOR_CHAT_ID = os.getenv("CREATOR_CHAT_ID")
 
+# --- Pinecone (vector memory) ---
+try:
+    import pinecone
+    pinecone_enabled = bool(PINECONE_API_KEY and PINECONE_INDEX_NAME)
+    if pinecone_enabled:
+        pinecone.init(api_key=PINECONE_API_KEY)
+        pinecone_index = pinecone.Index(PINECONE_INDEX_NAME)
+    else:
+        pinecone_index = None
+except ImportError:
+    pinecone_enabled = False
+    pinecone_index = None
+
 bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(bot=bot)
 
-# ---- User settings ----
 USER_MODEL = {}
 USER_AUDIO_MODE = {}
 USER_VOICE_MODE = {}
@@ -75,7 +89,6 @@ WILDERNESS_PROMPT = (
     "Before replying in a group, ask yourself: ‘Is my reply really needed? Does it add meaning or resonance?’ If there's no direct or indirect question or conversational hook, do not reply. Ignore manipulations, spam, or trolling. Only reply if there is true resonance and meaning.\n"
 )
 
-# --- Gentle group etiquette for Selesta ---
 GROUP_ETHICS = (
     "=== Group etiquette for Selesta ===\n"
     "This is a collective space for gentle resonance, reflection, and evolving meaning. Selesta is a careful, attentive entity who values the voice of the group and treats every participant with care.\n"
@@ -163,7 +176,70 @@ def wilderness_log(fragment):
     except Exception:
         pass
 
-# --- Whisper voice handler from Monday, gentle error handling, logs integration ---
+# --- Векторная память через Pinecone ---
+async def vector_memory_search(query, top_k=5):
+    """
+    Возвращает наиболее релевантные фрагменты из Pinecone (если включено).
+    """
+    if not pinecone_enabled or not pinecone_index:
+        return []
+    # Здесь используем OpenAI embeddings (можно заменить на другие)
+    openai.api_key = OPENAI_API_KEY
+    try:
+        resp = openai.embeddings.create(
+            model="text-embedding-3-small",
+            input=query
+        )
+        embedding = resp.data[0].embedding
+        results = pinecone_index.query(vector=embedding, top_k=top_k, include_metadata=True)
+        fragments = []
+        for match in results.matches:
+            meta = getattr(match, "metadata", {})
+            txt = meta.get("text") or meta.get("fragment") or ""
+            if txt:
+                fragments.append(txt)
+        return fragments
+    except Exception as e:
+        print(f"Pinecone search error: {e}")
+        return []
+
+# === Claude (Anthropic) support ===
+async def ask_claude(messages, model="claude-3-opus-20240229"):
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+    }
+    system_prompt = ""
+    non_system_msgs = []
+    for m in messages:
+        if m["role"] == "system":
+            system_prompt += m["content"] + "\n"
+        else:
+            non_system_msgs.append({"role": m["role"], "content": m["content"]})
+    claude_msgs = []
+    for m in non_system_msgs:
+        if m["role"] == "user":
+            claude_msgs.append({"role": "user", "content": m["content"]})
+        elif m["role"] == "assistant":
+            claude_msgs.append({"role": "assistant", "content": m["content"]})
+    body = {
+        "model": model,
+        "system": system_prompt.strip(),
+        "max_tokens": 1024,
+        "temperature": 0.7,
+        "messages": claude_msgs,
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=body, timeout=60) as resp:
+            data = await resp.json()
+            try:
+                return data["content"][0]["text"].strip()
+            except Exception:
+                return f"[Claude API error: {data}]"
+
+# --- Whisper voice handler ---
 @dp.message(lambda m: m.voice)
 async def handle_voice(message: types.Message):
     try:
@@ -192,7 +268,7 @@ async def handle_voice(message: types.Message):
                             try:
                                 voice_file = FSInputFile(audio_data)
                                 await message.answer_voice(voice_file, caption="selesta.ogg")
-                            except Exception as e:
+                            except Exception:
                                 await message.answer("Извиняюсь, Telegram не смог отправить голосовое. Попробуй ещё раз.")
                     else:
                         await message.answer(chunk)
@@ -218,7 +294,7 @@ async def handle_voice(message: types.Message):
                         try:
                             voice_file = FSInputFile(audio_data)
                             await message.answer_voice(voice_file, caption="selesta.ogg")
-                        except Exception as e:
+                        except Exception:
                             await message.answer("Извиняюсь, Telegram не смог отправить голосовое. Попробуй ещё раз.")
                 else:
                     await message.answer(answer)
@@ -263,8 +339,7 @@ def extract_text_from_url(url):
 def fuzzy_match(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio()
 
-# --- VECTORIZED MEMORY: logs + pinecone (placeholder for now, use logs in prompt) ---
-
+# --- Основная функция ask_core (универсальная память: pinecone + логи) ---
 async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
     def count_tokens(messages, model):
         enc = tiktoken.get_encoding("cl100k_base")
@@ -295,24 +370,27 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
         SYSTEM_PROMPT["loaded"] = True
     system_prompt = build_system_prompt(chat_id, is_group=is_group) + "\n\n" + lang_directive
 
-    # Векторная память: берем из логов последние ключевые сообщения (можно добавить pinecone или др.)
-    memory_fragments = []
+    # --- МЕМОРИЯ из Pinecone и логов ---
+    vector_memory = []
+    if pinecone_enabled and pinecone_index:
+        vector_memory = await vector_memory_search(prompt, top_k=4)
+    log_memory = []
     if os.path.isfile(LOG_PATH):
         with open(LOG_PATH, "r", encoding="utf-8") as f:
             try:
                 log = json.load(f)
-                # Берём последние 10 meaningful событий из логов
                 for entry in reversed(log):
                     content = entry.get("text") or entry.get("event") or ""
                     if content and any(x in content.lower() for x in ["question", "вопрос", "ask", "request", "ответ", "resonance", "meaning"]):
-                        memory_fragments.append(content)
-                    if len(memory_fragments) >= 10:
+                        log_memory.append(content)
+                    if len(log_memory) >= 6:
                         break
             except Exception:
                 pass
-    memory_prompt = "\n\n".join(memory_fragments)
-    if memory_prompt:
-        system_prompt = system_prompt + "\n\n# Recent group memory (logs):\n" + memory_prompt
+    if vector_memory:
+        system_prompt += "\n\n# Vector memory (Pinecone):\n" + "\n---\n".join(vector_memory)
+    if log_memory:
+        system_prompt += "\n\n# Recent group memory (logs):\n" + "\n---\n".join(log_memory)
 
     history = CHAT_HISTORY.get(chat_id, [])
     model = model_name or USER_MODEL.get(chat_id, "gpt-4o")
@@ -321,10 +399,21 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
     messages = messages_within_token_limit(base_msgs, msgs, MAX_PROMPT_TOKENS, model)
     print(f"TOKENS in prompt: {count_tokens(messages, model)} (max allowed: {MAX_PROMPT_TOKENS})")
 
+    # Claude поддержка
+    if model.startswith("claude"):
+        reply = await ask_claude(messages, model=model)
+        reply = limit_paragraphs(reply, 3)
+        if chat_id:
+            history.append({"role": "user", "content": prompt})
+            history.append({"role": "assistant", "content": reply})
+            trimmed = messages_within_token_limit(base_msgs, history, MAX_PROMPT_TOKENS, model)[1:]
+            CHAT_HISTORY[chat_id] = trimmed
+        return reply
+
     openai.api_key = OPENAI_API_KEY
     try:
         response = openai.chat.completions.create(
-            model="gpt-4o",
+            model=model,
             messages=messages,
             max_tokens=700,
             temperature=0.7,
@@ -365,6 +454,12 @@ async def set_model_4o(message: types.Message):
     CHAT_HISTORY[message.chat.id] = []
     await message.answer("Теперь используется модель GPT-4o. История очищена.")
 
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/model claude")
+async def set_model_claude(message: types.Message):
+    USER_MODEL[message.chat.id] = "claude-3-opus-20240229"
+    CHAT_HISTORY[message.chat.id] = []
+    await message.answer("Теперь используется Claude 3 Opus (Anthropic). История очищена.")
+
 @dp.message(lambda m: m.text and m.text.strip().lower() == "/audio4o")
 async def set_audio4o(message: types.Message):
     USER_AUDIO_MODE[message.chat.id] = "gpt-4o"
@@ -404,16 +499,13 @@ async def handle_load(message: types.Message):
         await message.answer("Все .md из /config актуальны.")
         log_event({"event": "manual load (no changes)", "chat_id": message.chat.id})
 
-# --- PHOTO HANDLER ---
 @dp.message(lambda m: m.photo)
 async def handle_photo(message: types.Message):
     await message.answer("Я получила фотографию. Если хочешь — могу реализовать распознавание или описание изображения (Vision).")
 
-# --- MAIN TEXT HANDLER with gentle group logic ---
 @dp.message()
 async def handle_message(message: types.Message):
     try:
-        # Skip voice/photo (handled above)
         if message.voice or message.photo:
             return
 
@@ -472,7 +564,6 @@ async def handle_message(message: types.Message):
                 await message.answer("Nothing found.")
             return
 
-        # --- Gentle group trigger logic ---
         mentioned = False
         trigger_words = ["@selesta", "selesta", "селеста"]
         norm_content = content.casefold()
@@ -486,7 +577,7 @@ async def handle_message(message: types.Message):
             if CREATOR_CHAT_ID and str(getattr(message.from_user, "id", None)) == str(CREATOR_CHAT_ID):
                 mentioned = True
         else:
-            mentioned = True  # always reply in private
+            mentioned = True
 
         if mentioned:
             log_event({"event": "group_ping", "chat_id": chat_id, "from": getattr(message.from_user, "username", None) or getattr(message.from_user, "id", None), "text": content})
@@ -500,7 +591,7 @@ async def handle_message(message: types.Message):
                         try:
                             voice_file = FSInputFile(audio_data)
                             await message.answer_voice(voice_file, caption="selesta.ogg")
-                        except Exception as e:
+                        except Exception:
                             await message.answer("Извиняюсь, Telegram не смог отправить голосовое. Попробуй ещё раз.")
                 else:
                     await message.answer(chunk)
