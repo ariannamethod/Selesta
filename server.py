@@ -37,11 +37,11 @@ CREATOR_CHAT_ID = os.getenv("CREATOR_CHAT_ID")
 
 # --- Pinecone (vector memory) ---
 try:
-    import pinecone
+    from pinecone import Pinecone, ServerlessSpec
     pinecone_enabled = bool(PINECONE_API_KEY and PINECONE_INDEX_NAME)
     if pinecone_enabled:
-        pinecone.init(api_key=PINECONE_API_KEY)
-        pinecone_index = pinecone.Index(PINECONE_INDEX_NAME)
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        pinecone_index = pc.Index(PINECONE_INDEX_NAME)
     else:
         pinecone_index = None
 except ImportError:
@@ -183,7 +183,6 @@ async def vector_memory_search(query, top_k=5):
     """
     if not pinecone_enabled or not pinecone_index:
         return []
-    # Здесь используем OpenAI embeddings (можно заменить на другие)
     openai.api_key = OPENAI_API_KEY
     try:
         resp = openai.embeddings.create(
