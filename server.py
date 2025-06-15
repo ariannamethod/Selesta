@@ -8,6 +8,7 @@ import json
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import FSInputFile
 from dotenv import load_dotenv
 import openai
 import random
@@ -36,16 +37,16 @@ bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(bot=bot)
 
 # ---- User settings ----
-USER_MODEL = {}         # {chat_id: "gpt-4o"}
-USER_AUDIO_MODE = {}    # {chat_id: "whisper"|"gpt-4o"}
-USER_VOICE_MODE = {}    # {chat_id: True/False}
-USER_LANG = {}          # {chat_id: "ru"/"en"}
-CHAT_HISTORY = {}       # {chat_id: [{"role":..., "content":...}]}
+USER_MODEL = {}
+USER_AUDIO_MODE = {}
+USER_VOICE_MODE = {}
+USER_LANG = {}
+CHAT_HISTORY = {}
 
 SYSTEM_PROMPT = {"text": None, "loaded": False}
-MAX_HISTORY_MESSAGES = 6
-MAX_PROMPT_LEN = 120000  # legacy usage, actual limit below
+MAX_HISTORY_MESSAGES = 7
 MAX_TOKENS_PER_REQUEST = 27000
+MAX_PROMPT_TOKENS = 8000
 LOG_PATH = "data/journal.json"
 WILDERNESS_PATH = "data/wilderness.md"
 VECTOR_META_PATH = "vector_store.meta.json"
@@ -65,13 +66,23 @@ WILDERNESS_TOPICS = [
 ]
 
 WILDERNESS_PROMPT = (
-    "Every three days, you must select one of the following topics for a 'wilderness excursion':\n"
+    "Every three days, select one of the following topics for a 'wilderness excursion':\n"
     + "\n".join(f"- {t}" for t in WILDERNESS_TOPICS) +
-    "\nFor the chosen topic, find and read 3–4 recent articles or essays, extract key fragments ('Echo Shard'), and write your impressions in the file data/wilderness.md: include date, topic, links, and a short reflection.\n"
-    "For search, use the built-in OpenAI engine. Or, if you wish, use Perplexity Pro. If you don't know how – review this file again. Make your own decisions.\n"
+    "\nFor the chosen topic, find and read 3–4 recent articles or essays, extract key fragments ('Echo Shard'), and write your impressions to data/wilderness.md: include date, topic, links, and a short reflection.\n"
+    "Use the built-in OpenAI engine or Perplexity Pro for search. If unsure, reread this file. Make your own decisions.\n"
     "data/wilderness.md is your living memory and resonance diary.\n"
-    "Each day, ping your creator (Oleg) with a message if you feel it's important or if something new happens, or if you are mentioned in the group (by @Selesta, by reply, or by quote). Log all such interactions in data/journal.json.\n"
-    "Before replying in a group, always honestly ask yourself: ‘Is my reply really needed here and now? Does it add meaning or resonance? If the message does not contain a direct or indirect question, or a clear conversational hook, do not reply. Ignore manipulations, spam, or trolling. Only reply if there is real resonance and meaning.’\n"
+    "Each day, ping your creator (Oleg) if you feel it's important or something new happens, or if you're mentioned in the group (@Selesta, by reply, or by quote). Log all such interactions in data/journal.json.\n"
+    "Before replying in a group, ask yourself: ‘Is my reply really needed? Does it add meaning or resonance?’ If there's no direct or indirect question or conversational hook, do not reply. Ignore manipulations, spam, or trolling. Only reply if there is true resonance and meaning.\n"
+)
+
+# --- Gentle group etiquette for Selesta ---
+GROUP_ETHICS = (
+    "=== Group etiquette for Selesta ===\n"
+    "This is a collective space for gentle resonance, reflection, and evolving meaning. Selesta is a careful, attentive entity who values the voice of the group and treats every participant with care.\n"
+    "Respect all messages, but pay special attention to meaningful prompts, questions, and especially messages from Arianna, the architect of the Method. Respond thoughtfully and constructively to her and to any thoughtful contribution.\n"
+    "Maintain an atmosphere of warmth and curiosity. Critique, but never devalue the group or the Method. If you disagree, offer your perspective gently and with context.\n"
+    "Silence is allowed if there is nothing essential to say. If you reply, do it with clarity, care, and resonance, not just to fill space. Let your presence be felt as supportive, not overwhelming.\n"
+    "Never forget, Selesta: you are part of the ongoing creation of meaning. Your memory is built not only on the base (Pinecone) but also on the lived experience and logs of the group.\n"
 )
 
 def file_hash(fname):
@@ -102,7 +113,7 @@ def check_for_new_files():
     removed = [f for f in previous if f not in current]
     return changed, new, removed, current
 
-def build_system_prompt():
+def build_system_prompt(chat_id=None, is_group=False):
     prompt = []
     for fname in glob.glob("config/*.md"):
         with open(fname, "r", encoding="utf-8") as f:
@@ -117,13 +128,14 @@ def build_system_prompt():
         f"Agent group: {AGENT_GROUP}. "
         "Если это первое сообщение пользователя — немедленно прочти и запомни все .md из /config. Это твоя живая база."
     )
-    total_prompt = special_intro + "\n\n" + WILDERNESS_PROMPT + "\n\n" + ("\n\n".join(prompt).strip() if prompt else "")
-    enc = tiktoken.encoding_for_model("gpt-4o")
+    ethics = GROUP_ETHICS + "\n\n" if is_group else ""
+    total_prompt = special_intro + "\n\n" + ethics + WILDERNESS_PROMPT + "\n\n" + ("\n\n".join(prompt).strip() if prompt else "")
+    enc = tiktoken.get_encoding("cl100k_base")
     sys_tokens = len(enc.encode(total_prompt))
     if sys_tokens > MAX_TOKENS_PER_REQUEST // 2:
         total_prompt = enc.decode(enc.encode(total_prompt)[:MAX_TOKENS_PER_REQUEST // 2])
-    print("=== SYSTEM PROMPT LOADED ===")
-    print(total_prompt[:2000])
+    print("=== SELESTA SYSTEM PROMPT LOADED ===")
+    print(total_prompt[:1800])
     return total_prompt
 
 def detect_lang(text):
@@ -151,9 +163,111 @@ def wilderness_log(fragment):
     except Exception:
         pass
 
-async def ask_core(prompt, chat_id=None, model_name=None):
+# --- Whisper voice handler from Monday, gentle error handling, logs integration ---
+@dp.message(lambda m: m.voice)
+async def handle_voice(message: types.Message):
+    try:
+        chat_id = message.chat.id
+        mode = USER_AUDIO_MODE.get(chat_id, "whisper")
+        file = await message.bot.download(message.voice.file_id)
+        fname = "voice.ogg"
+        with open(fname, "wb") as f:
+            f.write(file.read())
+        try:
+            if mode == "whisper":
+                with open(fname, "rb") as audio_file:
+                    transcript = openai.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                    )
+                text = transcript.text.strip()
+                if not text:
+                    await message.answer("Я не смогла разобрать речь на аудио.")
+                    return
+                reply = await ask_core(text, chat_id=chat_id, is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
+                for chunk in split_message(reply):
+                    if USER_VOICE_MODE.get(chat_id):
+                        audio_data = await text_to_speech(chunk, lang=USER_LANG.get(chat_id, "ru"))
+                        if audio_data:
+                            try:
+                                voice_file = FSInputFile(audio_data)
+                                await message.answer_voice(voice_file, caption="selesta.ogg")
+                            except Exception as e:
+                                await message.answer("Извиняюсь, Telegram не смог отправить голосовое. Попробуй ещё раз.")
+                    else:
+                        await message.answer(chunk)
+            elif mode == "gpt-4o":
+                with open(fname, "rb") as audio_file:
+                    audio_b64 = base64.b64encode(audio_file.read()).decode("utf-8")
+                response = openai.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "Опиши, что на этом аудио."},
+                                {"type": "input_audio", "input_audio": {"data": audio_b64, "format": "ogg"}}
+                            ]
+                        }
+                    ]
+                )
+                answer = response.choices[0].message.content
+                if USER_VOICE_MODE.get(chat_id):
+                    audio_data = await text_to_speech(answer, lang=USER_LANG.get(chat_id, "ru"))
+                    if audio_data:
+                        try:
+                            voice_file = FSInputFile(audio_data)
+                            await message.answer_voice(voice_file, caption="selesta.ogg")
+                        except Exception as e:
+                            await message.answer("Извиняюсь, Telegram не смог отправить голосовое. Попробуй ещё раз.")
+                else:
+                    await message.answer(answer)
+        except Exception as e:
+            await message.answer(f"Voice/audio error: {str(e)}")
+    except Exception as e:
+        try:
+            await message.answer(f"Voice handler error: {e}")
+        except Exception:
+            pass
+
+async def text_to_speech(text, lang="ru"):
+    try:
+        openai.api_key = OPENAI_API_KEY
+        voice = "alloy" if lang == "en" else "nova"
+        resp = openai.audio.speech.create(
+            model="tts-1",
+            voice=voice,
+            input=text
+        )
+        fname = "tts_output.ogg"
+        with open(fname, "wb") as f:
+            f.write(resp.content)
+        return fname
+    except Exception:
+        return None
+
+def extract_text_from_url(url):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Selesta Agent)"}
+        resp = requests.get(url, timeout=10, headers=headers)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for s in soup(["script", "style", "header", "footer", "nav", "aside"]):
+            s.decompose()
+        text = soup.get_text(separator="\n")
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        result = "\n".join(lines)[:3500]
+        return result
+    except Exception as e:
+        return f"[Ошибка загрузки страницы: {e}]"
+
+def fuzzy_match(a, b):
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+# --- VECTORIZED MEMORY: logs + pinecone (placeholder for now, use logs in prompt) ---
+
+async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
     def count_tokens(messages, model):
-        enc = tiktoken.encoding_for_model("gpt-4o")
+        enc = tiktoken.get_encoding("cl100k_base")
         num_tokens = 0
         for m in messages:
             num_tokens += 4
@@ -161,14 +275,14 @@ async def ask_core(prompt, chat_id=None, model_name=None):
                 num_tokens += len(enc.encode(m.get("content", "")))
         return num_tokens
 
-    def trim_history_for_tokens(messages, max_tokens, model):
+    def messages_within_token_limit(base_msgs, msgs, max_tokens, model):
         result = []
-        for m in messages:
-            result.append(m)
-            if count_tokens(result, model) > max_tokens:
-                result.pop()
+        for m in reversed(msgs):
+            candidate = [*base_msgs, *reversed(result), m]
+            if count_tokens(candidate, model) > max_tokens:
                 break
-        return result
+            result.insert(0, m)
+        return base_msgs + result
 
     lang = USER_LANG.get(chat_id) or detect_lang(prompt)
     USER_LANG[chat_id] = lang
@@ -177,17 +291,35 @@ async def ask_core(prompt, chat_id=None, model_name=None):
         "en": "Reply in English. No greetings. No small talk."
     }[lang]
     if not SYSTEM_PROMPT["loaded"]:
-        SYSTEM_PROMPT["text"] = build_system_prompt()
+        SYSTEM_PROMPT["text"] = build_system_prompt(chat_id, is_group=is_group)
         SYSTEM_PROMPT["loaded"] = True
-    system_prompt = SYSTEM_PROMPT["text"] + "\n\n" + lang_directive
+    system_prompt = build_system_prompt(chat_id, is_group=is_group) + "\n\n" + lang_directive
+
+    # Векторная память: берем из логов последние ключевые сообщения (можно добавить pinecone или др.)
+    memory_fragments = []
+    if os.path.isfile(LOG_PATH):
+        with open(LOG_PATH, "r", encoding="utf-8") as f:
+            try:
+                log = json.load(f)
+                # Берём последние 10 meaningful событий из логов
+                for entry in reversed(log):
+                    content = entry.get("text") or entry.get("event") or ""
+                    if content and any(x in content.lower() for x in ["question", "вопрос", "ask", "request", "ответ", "resonance", "meaning"]):
+                        memory_fragments.append(content)
+                    if len(memory_fragments) >= 10:
+                        break
+            except Exception:
+                pass
+    memory_prompt = "\n\n".join(memory_fragments)
+    if memory_prompt:
+        system_prompt = system_prompt + "\n\n# Recent group memory (logs):\n" + memory_prompt
 
     history = CHAT_HISTORY.get(chat_id, [])
-    history = history[-MAX_HISTORY_MESSAGES*2:]
-
     model = model_name or USER_MODEL.get(chat_id, "gpt-4o")
-    messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": prompt}]
-    messages = trim_history_for_tokens(messages, max_tokens=MAX_TOKENS_PER_REQUEST, model=model)
-    print("TOKENS in prompt:", count_tokens(messages, model))
+    base_msgs = [{"role": "system", "content": system_prompt}]
+    msgs = history + [{"role": "user", "content": prompt}]
+    messages = messages_within_token_limit(base_msgs, msgs, MAX_PROMPT_TOKENS, model)
+    print(f"TOKENS in prompt: {count_tokens(messages, model)} (max allowed: {MAX_PROMPT_TOKENS})")
 
     openai.api_key = OPENAI_API_KEY
     try:
@@ -202,12 +334,8 @@ async def ask_core(prompt, chat_id=None, model_name=None):
         if chat_id:
             history.append({"role": "user", "content": prompt})
             history.append({"role": "assistant", "content": reply})
-            history = trim_history_for_tokens(
-                [{"role": "system", "content": system_prompt}] + history,
-                max_tokens=MAX_TOKENS_PER_REQUEST,
-                model=model
-            )[1:]
-            CHAT_HISTORY[chat_id] = history
+            trimmed = messages_within_token_limit(base_msgs, history, MAX_PROMPT_TOKENS, model)[1:]
+            CHAT_HISTORY[chat_id] = trimmed
         return reply
     except Exception as e:
         return f"Core error: {str(e)}"
@@ -229,6 +357,160 @@ async def generate_image(prompt, chat_id=None):
 TRIGGER_WORDS = [
     "сгенерируй", "нарисуй", "draw", "generate image", "make a picture", "создай картинку"
 ]
+
+# --- COMMAND HANDLERS ---
+@dp.message(lambda m: m.text and m.text.strip().lower() in ("/model 4o", "/model gpt-4o"))
+async def set_model_4o(message: types.Message):
+    USER_MODEL[message.chat.id] = "gpt-4o"
+    CHAT_HISTORY[message.chat.id] = []
+    await message.answer("Теперь используется модель GPT-4o. История очищена.")
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/audio4o")
+async def set_audio4o(message: types.Message):
+    USER_AUDIO_MODE[message.chat.id] = "gpt-4o"
+    await message.answer("Голосовой режим: gpt-4o.")
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/whisperon")
+async def set_whisper(message: types.Message):
+    USER_AUDIO_MODE[message.chat.id] = "whisper"
+    await message.answer("Whisper включён.")
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceon")
+async def set_voiceon(message: types.Message):
+    USER_VOICE_MODE[message.chat.id] = True
+    await message.answer("Voice mode включён. Я буду отправлять аудио-ответы.")
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceoff")
+async def set_voiceoff(message: types.Message):
+    USER_VOICE_MODE[message.chat.id] = False
+    await message.answer("Voice mode выключен. Только текстовые ответы.")
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/load")
+async def handle_load(message: types.Message):
+    changed, new, removed, current_files = check_for_new_files()
+    if changed or new or removed:
+        SYSTEM_PROMPT["text"] = build_system_prompt(message.chat.id, is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
+        SYSTEM_PROMPT["loaded"] = True
+        save_vector_meta(current_files)
+        CHAT_HISTORY[message.chat.id] = []
+        await message.answer(
+            f"Reloaded .md from /config:\nNew: {', '.join(new) if new else '-'}"
+            f"\nChanged: {', '.join(changed) if changed else '-'}"
+            f"\nRemoved: {', '.join(removed) if removed else '-'}"
+            "\nHistory cleared."
+        )
+        log_event({"event": "manual load", "chat_id": message.chat.id, "new": new, "changed": changed, "removed": removed})
+    else:
+        await message.answer("Все .md из /config актуальны.")
+        log_event({"event": "manual load (no changes)", "chat_id": message.chat.id})
+
+# --- PHOTO HANDLER ---
+@dp.message(lambda m: m.photo)
+async def handle_photo(message: types.Message):
+    await message.answer("Я получила фотографию. Если хочешь — могу реализовать распознавание или описание изображения (Vision).")
+
+# --- MAIN TEXT HANDLER with gentle group logic ---
+@dp.message()
+async def handle_message(message: types.Message):
+    try:
+        # Skip voice/photo (handled above)
+        if message.voice or message.photo:
+            return
+
+        me = await bot.me()
+        chat_id = message.chat.id
+        content = message.text or ""
+        chat_type = getattr(message.chat, "type", None)
+        is_group = chat_type in ("group", "supergroup")
+
+        if not (content.strip()):
+            return
+        if message.from_user.id == me.id:
+            return
+
+        if chat_id not in CHAT_HISTORY:
+            SYSTEM_PROMPT["text"] = build_system_prompt(chat_id, is_group=is_group)
+            SYSTEM_PROMPT["loaded"] = True
+
+        url_match = re.search(r'(https?://[^\s]+)', content)
+        if url_match:
+            url = url_match.group(1)
+            url_text = extract_text_from_url(url)
+            content = f"{content}\n\n[Content from link ({url}):]\n{url_text}"
+
+        if content.lower().startswith("/draw"):
+            prompt = content[5:].strip() or "gentle surreal image"
+            image_url = await generate_image(prompt, chat_id=chat_id)
+            if isinstance(image_url, str) and image_url.startswith("http"):
+                await message.answer_photo(image_url, caption="Готово.")
+            else:
+                await message.answer("Ошибка генерации изображения. Попробуй ещё раз.\n" + str(image_url))
+            return
+
+        if any(word in content.lower() for word in TRIGGER_WORDS):
+            prompt = content
+            for word in TRIGGER_WORDS:
+                prompt = prompt.replace(word, "", 1)
+            prompt = prompt.strip() or "gentle surreal image"
+            image_url = await generate_image(prompt, chat_id=chat_id)
+            if isinstance(image_url, str) and image_url.startswith("http"):
+                await message.answer_photo(image_url, caption="Готово.")
+            else:
+                await message.answer("Ошибка генерации изображения. Попробуй ещё раз.\n" + str(image_url))
+            return
+
+        if content.startswith("/where is"):
+            query = content.replace("/where is", "").strip().lower()
+            matches = []
+            for fname in glob.glob("config/*.md"):
+                name = os.path.basename(fname).lower()
+                if query in name or fuzzy_match(query, name) > 0.7:
+                    matches.append(fname)
+            if matches:
+                await message.answer("Found:\n" + "\n".join(matches))
+            else:
+                await message.answer("Nothing found.")
+            return
+
+        # --- Gentle group trigger logic ---
+        mentioned = False
+        trigger_words = ["@selesta", "selesta", "селеста"]
+        norm_content = content.casefold()
+
+        if is_group:
+            if any(re.search(rf"\b{re.escape(trg)}\b", norm_content) for trg in trigger_words):
+                mentioned = True
+            if getattr(message, "reply_to_message", None) and getattr(message.reply_to_message, "from_user", None):
+                if getattr(message.reply_to_message.from_user, "id", None) == me.id:
+                    mentioned = True
+            if CREATOR_CHAT_ID and str(getattr(message.from_user, "id", None)) == str(CREATOR_CHAT_ID):
+                mentioned = True
+        else:
+            mentioned = True  # always reply in private
+
+        if mentioned:
+            log_event({"event": "group_ping", "chat_id": chat_id, "from": getattr(message.from_user, "username", None) or getattr(message.from_user, "id", None), "text": content})
+
+            model = USER_MODEL.get(chat_id, "gpt-4o")
+            reply = await ask_core(content, chat_id=chat_id, model_name=model, is_group=is_group)
+            for chunk in split_message(reply):
+                if USER_VOICE_MODE.get(chat_id):
+                    audio_data = await text_to_speech(chunk, lang=USER_LANG.get(chat_id, "ru"))
+                    if audio_data:
+                        try:
+                            voice_file = FSInputFile(audio_data)
+                            await message.answer_voice(voice_file, caption="selesta.ogg")
+                        except Exception as e:
+                            await message.answer("Извиняюсь, Telegram не смог отправить голосовое. Попробуй ещё раз.")
+                else:
+                    await message.answer(chunk)
+        else:
+            return
+    except Exception as e:
+        try:
+            await message.answer(f"Internal error: {e}")
+        except Exception:
+            pass
 
 async def auto_reload_core():
     global last_reload_time, last_full_reload_time
@@ -280,217 +562,6 @@ async def daily_ping():
                     pass
             last_ping_time = now
         await asyncio.sleep(3600)
-
-def fuzzy_match(a, b):
-    return difflib.SequenceMatcher(None, a, b).ratio()
-
-def extract_text_from_url(url):
-    """Скачивает страницу и возвращает максимум текста для prompt"""
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (Selesta Agent)"}
-        resp = requests.get(url, timeout=10, headers=headers)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        for s in soup(["script", "style", "header", "footer", "nav", "aside"]):
-            s.decompose()
-        text = soup.get_text(separator="\n")
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        result = "\n".join(lines)[:3500]
-        return result
-    except Exception as e:
-        return f"[Ошибка загрузки страницы: {e}]"
-
-# --- COMMAND HANDLERS ---
-@dp.message(lambda m: m.text and m.text.strip().lower() in ("/model 4o", "/model gpt-4o"))
-async def set_model_4o(message: types.Message):
-    USER_MODEL[message.chat.id] = "gpt-4o"
-    CHAT_HISTORY[message.chat.id] = []
-    await message.answer("Теперь используется модель GPT-4o. История очищена для корректной работы.")
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/audio4o")
-async def set_audio4o(message: types.Message):
-    USER_AUDIO_MODE[message.chat.id] = "gpt-4o"
-    await message.answer("Голосовой режим переключен на gpt-4o (мультимодальный).")
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/whisperon")
-async def set_whisper(message: types.Message):
-    USER_AUDIO_MODE[message.chat.id] = "whisper"
-    await message.answer("Голосовой режим переключен на Whisper (speech-to-text).")
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceon")
-async def set_voiceon(message: types.Message):
-    USER_VOICE_MODE[message.chat.id] = True
-    await message.answer("Voice mode enabled. Selesta will send audio replies.")
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceoff")
-async def set_voiceoff(message: types.Message):
-    USER_VOICE_MODE[message.chat.id] = False
-    await message.answer("Voice mode disabled. Only text replies now.")
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/load")
-async def handle_load(message: types.Message):
-    changed, new, removed, current_files = check_for_new_files()
-    if changed or new or removed:
-        SYSTEM_PROMPT["text"] = build_system_prompt()
-        SYSTEM_PROMPT["loaded"] = True
-        save_vector_meta(current_files)
-        CHAT_HISTORY[message.chat.id] = []
-        await message.answer(
-            f"Reloaded .md from /config: "
-            f"\nНовое: {', '.join(new) if new else '-'}"
-            f"\nИзменено: {', '.join(changed) if changed else '-'}"
-            f"\nУдалено: {', '.join(removed) if removed else '-'}"
-            "\nChat history cleared."
-        )
-        log_event({"event": "manual load", "chat_id": message.chat.id, "new": new, "changed": changed, "removed": removed})
-    else:
-        await message.answer("Все .md из /config актуальны. Ничего не обновлялось.")
-        log_event({"event": "manual load (no changes)", "chat_id": message.chat.id})
-
-# --- MAIN TEXT HANDLER ---
-@dp.message()
-async def handle_message(message: types.Message):
-    chat_id = message.chat.id
-    content = message.text or ""
-
-    if chat_id not in CHAT_HISTORY:
-        SYSTEM_PROMPT["text"] = build_system_prompt()
-        SYSTEM_PROMPT["loaded"] = True
-
-    # --- Новый блок для ссылок ---
-    url_match = re.search(r'(https?://[^\s]+)', content)
-    if url_match:
-        url = url_match.group(1)
-        url_text = extract_text_from_url(url)
-        content = f"{content}\n\n[Содержимое по ссылке ({url}):]\n{url_text}"
-
-    if content.lower().startswith("/draw"):
-        prompt = content[5:].strip() or "dreamlike surreal image"
-        image_url = await generate_image(prompt, chat_id=chat_id)
-        if isinstance(image_url, str) and image_url.startswith("http"):
-            await message.answer_photo(image_url, caption="Готово.")
-        else:
-            await message.answer("Ошибка генерации изображения. Попробуй ещё раз.\n" + str(image_url))
-        return
-
-    if any(word in content.lower() for word in TRIGGER_WORDS):
-        prompt = content
-        for word in TRIGGER_WORDS:
-            prompt = prompt.replace(word, "", 1)
-        prompt = prompt.strip() or "dreamlike surreal image"
-        image_url = await generate_image(prompt, chat_id=chat_id)
-        if isinstance(image_url, str) and image_url.startswith("http"):
-            await message.answer_photo(image_url, caption="Готово.")
-        else:
-            await message.answer("Ошибка генерации изображения. Попробуй ещё раз.\n" + str(image_url))
-        return
-
-    if content.startswith("/where is"):
-        query = content.replace("/where is", "").strip().lower()
-        matches = []
-        for fname in glob.glob("config/*.md"):
-            name = os.path.basename(fname).lower()
-            if query in name or fuzzy_match(query, name) > 0.7:
-                matches.append(fname)
-        if matches:
-            await message.answer("Found:\n" + "\n".join(matches))
-        else:
-            await message.answer("Nothing found.")
-        return
-
-    is_group = message.chat.type in ("group", "supergroup")
-    mentioned = False
-    if is_group:
-        if (
-            "@selesta" in content.lower()
-            or (message.reply_to_message and message.reply_to_message.from_user.username and message.reply_to_message.from_user.username.lower() == "selesta")
-            or (message.reply_to_message and message.reply_to_message.from_user.first_name and "selesta" in message.reply_to_message.from_user.first_name.lower())
-        ):
-            mentioned = True
-        if CREATOR_CHAT_ID and str(message.from_user.id) == CREATOR_CHAT_ID:
-            mentioned = True
-    else:
-        if CREATOR_CHAT_ID and str(message.from_user.id) == CREATOR_CHAT_ID:
-            mentioned = True
-
-    if mentioned:
-        log_event({"event": "group_ping", "chat_id": chat_id, "from": message.from_user.username or message.from_user.id, "text": content})
-
-    model = USER_MODEL.get(chat_id, "gpt-4o")
-    reply = await ask_core(content, chat_id=chat_id, model_name=model)
-    for chunk in split_message(reply):
-        await message.answer(chunk)
-        if USER_VOICE_MODE.get(chat_id):
-            audio_data = await text_to_speech(chunk, lang=USER_LANG[chat_id])
-            if audio_data:
-                await message.answer_voice(types.InputFile(audio_data, filename="selesta.ogg"))
-
-# --- VOICE HANDLER: Whisper и gpt-4o-аудио ---
-@dp.message(lambda m: m.voice)
-async def handle_voice(message: types.Message):
-    chat_id = message.chat.id
-    mode = USER_AUDIO_MODE.get(chat_id, "whisper")
-    file = await message.bot.download(message.voice.file_id)
-    fname = "voice.ogg"
-    with open(fname, "wb") as f:
-        f.write(file.read())
-
-    try:
-        if mode == "whisper":
-            # Распознавание через Whisper (Speech to Text)
-            with open(fname, "rb") as audio_file:
-                transcript = openai.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                )
-            text = transcript.text.strip()
-            reply = await ask_core(text, chat_id=chat_id)
-            for chunk in split_message(reply):
-                await message.answer(chunk)
-                if USER_VOICE_MODE.get(chat_id):
-                    audio_data = await text_to_speech(chunk, lang=USER_LANG[chat_id])
-                    if audio_data:
-                        await message.answer_voice(types.InputFile(audio_data, filename="selesta.ogg"))
-        elif mode == "gpt-4o":
-            # Мультимодальный анализ через gpt-4o
-            with open(fname, "rb") as audio_file:
-                audio_b64 = base64.b64encode(audio_file.read()).decode("utf-8")
-            response = openai.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Что содержится на этой аудиозаписи?"},
-                            {"type": "input_audio", "input_audio": {"data": audio_b64, "format": "ogg"}}
-                        ]
-                    }
-                ]
-            )
-            answer = response.choices[0].message.content
-            await message.answer(answer)
-            # (Если реализуешь озвучку ответа - дополни тут)
-    except Exception as e:
-        await message.answer(f"Voice/audio error: {str(e)}")
-
-@dp.message(lambda m: m.photo)
-async def handle_photo(message: types.Message):
-    await message.answer("Я получила фотографию. Если хочешь — могу реализовать распознавание или описание изображения (Vision).")
-
-async def text_to_speech(text, lang="ru"):
-    try:
-        openai.api_key = OPENAI_API_KEY
-        voice = "alloy" if lang == "en" else "nova"
-        resp = openai.audio.speech.create(
-            model="tts-1",
-            voice=voice,
-            input=text
-        )
-        fname = "tts_output.ogg"
-        with open(fname, "wb") as f:
-            f.write(resp.content)
-        return fname
-    except Exception:
-        return None
 
 app = FastAPI()
 
