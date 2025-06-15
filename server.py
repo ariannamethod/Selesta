@@ -14,15 +14,14 @@ import openai
 import random
 import difflib
 import base64
-
-from utils.split_message import split_message
-from utils.limit_paragraphs import limit_paragraphs
-from utils.file_handling import extract_text_from_file
-
 import tiktoken
 import re
 import requests
 from bs4 import BeautifulSoup
+
+from utils.split_message import split_message
+from utils.limit_paragraphs import limit_paragraphs
+from utils.file_handling import extract_text_from_file
 
 # === Load environment variables ===
 load_dotenv()
@@ -32,6 +31,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 CORE_CONFIG_URL = os.getenv("CORE_CONFIG_URL", "https://selesta.ariannamethod.me/core.json")
 AGENT_GROUP = os.getenv("GROUP_ID", "SELESTA-CORE")
 CREATOR_CHAT_ID = os.getenv("CREATOR_CHAT_ID")
+BOT_NAME = os.getenv("BOT_NAME", "selesta").lower()
 
 bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(bot=bot)
@@ -111,7 +111,7 @@ def check_for_new_files():
     removed = [f for f in previous if f not in current]
     return changed, new, removed, current
 
-def build_system_prompt(chat_id=None, is_group=False):
+def build_system_prompt(is_group=False):
     prompt = []
     for fname in glob.glob("config/*.md"):
         with open(fname, "r", encoding="utf-8") as f:
@@ -197,73 +197,6 @@ async def ask_claude(messages, model="claude-3-opus-20240229"):
             except Exception:
                 return f"[Claude API error: {data}]"
 
-# --- Whisper voice handler ---
-@dp.message(lambda m: m.voice)
-async def handle_voice(message: types.Message):
-    try:
-        chat_id = message.chat.id
-        mode = USER_AUDIO_MODE.get(chat_id, "whisper")
-        file = await message.bot.download(message.voice.file_id)
-        fname = "voice.ogg"
-        with open(fname, "wb") as f:
-            f.write(file.read())
-        try:
-            if mode == "whisper":
-                with open(fname, "rb") as audio_file:
-                    transcript = openai.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=audio_file,
-                    )
-                text = transcript.text.strip()
-                if not text:
-                    await message.answer("Я не смогла разобрать речь на аудио.")
-                    return
-                reply = await ask_core(text, chat_id=chat_id, is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
-                for chunk in split_message(reply):
-                    if USER_VOICE_MODE.get(chat_id):
-                        audio_data = await text_to_speech(chunk, lang=USER_LANG.get(chat_id, "ru"))
-                        if audio_data:
-                            try:
-                                voice_file = FSInputFile(audio_data)
-                                await message.answer_voice(voice_file, caption="selesta.ogg")
-                            except Exception:
-                                await message.answer("Извиняюсь, Telegram не смог отправить голосовое. Попробуй ещё раз.")
-                    else:
-                        await message.answer(chunk)
-            elif mode == "gpt-4o":
-                with open(fname, "rb") as audio_file:
-                    audio_b64 = base64.b64encode(audio_file.read()).decode("utf-8")
-                response = openai.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": "Опиши, что на этом аудио."},
-                                {"type": "input_audio", "input_audio": {"data": audio_b64, "format": "ogg"}}
-                            ]
-                        }
-                    ]
-                )
-                answer = response.choices[0].message.content
-                if USER_VOICE_MODE.get(chat_id):
-                    audio_data = await text_to_speech(answer, lang=USER_LANG.get(chat_id, "ru"))
-                    if audio_data:
-                        try:
-                            voice_file = FSInputFile(audio_data)
-                            await message.answer_voice(voice_file, caption="selesta.ogg")
-                        except Exception:
-                            await message.answer("Извиняюсь, Telegram не смог отправить голосовое. Попробуй ещё раз.")
-                else:
-                    await message.answer(answer)
-        except Exception as e:
-            await message.answer(f"Voice/audio error: {str(e)}")
-    except Exception as e:
-        try:
-            await message.answer(f"Voice handler error: {e}")
-        except Exception:
-            pass
-
 async def text_to_speech(text, lang="ru"):
     try:
         openai.api_key = OPENAI_API_KEY
@@ -297,7 +230,35 @@ def extract_text_from_url(url):
 def fuzzy_match(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio()
 
-# --- Основная функция ask_core (память только на логах) ---
+# --- Whisper voice handler (Monday logic) ---
+@dp.message(lambda m: m.voice)
+async def handle_voice(message: types.Message):
+    chat_id = message.chat.id
+    file = await message.bot.download(message.voice.file_id)
+    fname = "voice.ogg"
+    with open(fname, "wb") as f:
+        f.write(file.read())
+    try:
+        with open(fname, "rb") as audio_file:
+            transcript = openai.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+            )
+        text = transcript.text.strip()
+        if not text:
+            await message.answer("Я не смогла разобрать речь на аудио.")
+            return
+        await handle_message(types.Message(
+            message_id=message.message_id,
+            from_user=message.from_user,
+            date=message.date,
+            chat=message.chat,
+            text=text,
+        ))  # Прокидываем как обычный текст
+    except Exception as e:
+        await message.answer(f"Voice/audio error: {str(e)}")
+
+# --- Основная функция ask_core (только память на логах) ---
 async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
     def count_tokens(messages, model):
         enc = tiktoken.get_encoding("cl100k_base")
@@ -324,9 +285,9 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
         "en": "Reply in English. No greetings. No small talk."
     }[lang]
     if not SYSTEM_PROMPT["loaded"]:
-        SYSTEM_PROMPT["text"] = build_system_prompt(chat_id, is_group=is_group)
+        SYSTEM_PROMPT["text"] = build_system_prompt(is_group=is_group)
         SYSTEM_PROMPT["loaded"] = True
-    system_prompt = build_system_prompt(chat_id, is_group=is_group) + "\n\n" + lang_directive
+    system_prompt = SYSTEM_PROMPT["text"] + "\n\n" + lang_directive
 
     # --- МЕМОРИЯ только из логов ---
     log_memory = []
@@ -413,11 +374,6 @@ async def set_model_claude(message: types.Message):
     CHAT_HISTORY[message.chat.id] = []
     await message.answer("Теперь используется Claude 3 Opus (Anthropic). История очищена.")
 
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/audio4o")
-async def set_audio4o(message: types.Message):
-    USER_AUDIO_MODE[message.chat.id] = "gpt-4o"
-    await message.answer("Голосовой режим: gpt-4o.")
-
 @dp.message(lambda m: m.text and m.text.strip().lower() == "/whisperon")
 async def set_whisper(message: types.Message):
     USER_AUDIO_MODE[message.chat.id] = "whisper"
@@ -437,7 +393,7 @@ async def set_voiceoff(message: types.Message):
 async def handle_load(message: types.Message):
     changed, new, removed, current_files = check_for_new_files()
     if changed or new or removed:
-        SYSTEM_PROMPT["text"] = build_system_prompt(message.chat.id, is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
+        SYSTEM_PROMPT["text"] = build_system_prompt(is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
         SYSTEM_PROMPT["loaded"] = True
         save_vector_meta(current_files)
         CHAT_HISTORY[message.chat.id] = []
@@ -468,13 +424,38 @@ async def handle_message(message: types.Message):
         chat_type = getattr(message.chat, "type", None)
         is_group = chat_type in ("group", "supergroup")
 
-        if not (content.strip()):
+        if not content.strip():
             return
         if message.from_user.id == me.id:
             return
 
+        # --- Групповая логика, как у Monday ---
+        mentioned = False
+        if is_group:
+            username = getattr(me, "username", BOT_NAME).lower()
+            triggers = [f"@{username}", username, BOT_NAME, "селеста"]
+            norm_content = content.casefold()
+            # Упоминание или reply к боту, или пишет владелец
+            if any(trg in norm_content for trg in triggers):
+                mentioned = True
+            if getattr(message, "reply_to_message", None) and getattr(message.reply_to_message, "from_user", None):
+                rname = getattr(message.reply_to_message.from_user, "username", "").lower()
+                if rname == username:
+                    mentioned = True
+                if getattr(message.reply_to_message.from_user, "first_name", "").lower() == BOT_NAME:
+                    mentioned = True
+            if CREATOR_CHAT_ID and str(getattr(message.from_user, "id", None)) == str(CREATOR_CHAT_ID):
+                mentioned = True
+        else:
+            mentioned = True
+
+        if not mentioned:
+            return
+
+        log_event({"event": "group_ping" if is_group else "private_ping", "chat_id": chat_id, "from": getattr(message.from_user, "username", None) or getattr(message.from_user, "id", None), "text": content})
+
         if chat_id not in CHAT_HISTORY:
-            SYSTEM_PROMPT["text"] = build_system_prompt(chat_id, is_group=is_group)
+            SYSTEM_PROMPT["text"] = build_system_prompt(is_group=is_group)
             SYSTEM_PROMPT["loaded"] = True
 
         url_match = re.search(r'(https?://[^\s]+)', content)
@@ -517,39 +498,19 @@ async def handle_message(message: types.Message):
                 await message.answer("Nothing found.")
             return
 
-        mentioned = False
-        trigger_words = ["@selesta", "selesta", "селеста"]
-        norm_content = content.casefold()
-
-        if is_group:
-            if any(re.search(rf"\b{re.escape(trg)}\b", norm_content) for trg in trigger_words):
-                mentioned = True
-            if getattr(message, "reply_to_message", None) and getattr(message.reply_to_message, "from_user", None):
-                if getattr(message.reply_to_message.from_user, "id", None) == me.id:
-                    mentioned = True
-            if CREATOR_CHAT_ID and str(getattr(message.from_user, "id", None)) == str(CREATOR_CHAT_ID):
-                mentioned = True
-        else:
-            mentioned = True
-
-        if mentioned:
-            log_event({"event": "group_ping", "chat_id": chat_id, "from": getattr(message.from_user, "username", None) or getattr(message.from_user, "id", None), "text": content})
-
-            model = USER_MODEL.get(chat_id, "gpt-4o")
-            reply = await ask_core(content, chat_id=chat_id, model_name=model, is_group=is_group)
-            for chunk in split_message(reply):
-                if USER_VOICE_MODE.get(chat_id):
-                    audio_data = await text_to_speech(chunk, lang=USER_LANG.get(chat_id, "ru"))
-                    if audio_data:
-                        try:
-                            voice_file = FSInputFile(audio_data)
-                            await message.answer_voice(voice_file, caption="selesta.ogg")
-                        except Exception:
-                            await message.answer("Извиняюсь, Telegram не смог отправить голосовое. Попробуй ещё раз.")
-                else:
-                    await message.answer(chunk)
-        else:
-            return
+        model = USER_MODEL.get(chat_id, "gpt-4o")
+        reply = await ask_core(content, chat_id=chat_id, model_name=model, is_group=is_group)
+        for chunk in split_message(reply):
+            if USER_VOICE_MODE.get(chat_id):
+                audio_data = await text_to_speech(chunk, lang=USER_LANG.get(chat_id, "ru"))
+                if audio_data:
+                    try:
+                        voice_file = FSInputFile(audio_data)
+                        await message.answer_voice(voice_file, caption="selesta.ogg")
+                    except Exception:
+                        await message.answer("Извиняюсь, Telegram не смог отправить голосовое. Попробуй ещё раз.")
+            else:
+                await message.answer(chunk)
     except Exception as e:
         try:
             await message.answer(f"Internal error: {e}")
