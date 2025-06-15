@@ -34,7 +34,6 @@ CREATOR_CHAT_ID = os.getenv("CREATOR_CHAT_ID")
 BOT_NAME = os.getenv("BOT_NAME", "selesta").lower()
 BOT_USERNAME = os.getenv("BOT_USERNAME", "SELESTA_is_not_a_bot").lower()
 
-# Все варианты триггеров для Selesta
 SELESTA_NAMES = [
     "selesta", "селеста", "селеста бот", "селеста_ai", "selestaai", "selesta bot", "селестаai",
     "@selesta", "@селеста", "@selestaai", "@selesta_is_not_a_bot", "@selestaai_bot", "@селестаai",
@@ -61,6 +60,26 @@ last_reload_time = datetime.now()
 last_full_reload_time = datetime.now()
 last_wilderness_time = datetime.now() - timedelta(days=3)
 last_ping_time = datetime.now() - timedelta(days=1)
+
+# --- Антиспам и фильтрация по темам ---
+LAST_TOPIC = {}
+LAST_ANSWER_TIME = {}
+
+def get_topic_from_text(text):
+    words = text.lower().split()
+    return " ".join(words[:10]) if words else ""
+
+def is_spam(chat_id, topic):
+    now = datetime.now()
+    last_topic = LAST_TOPIC.get(chat_id)
+    last_time = LAST_ANSWER_TIME.get(chat_id, now - timedelta(minutes=1))
+    if last_topic == topic and (now - last_time).total_seconds() < 15:
+        return True
+    return False
+
+def remember_topic(chat_id, topic):
+    LAST_TOPIC[chat_id] = topic
+    LAST_ANSWER_TIME[chat_id] = datetime.now()
 
 def load_core_config(path="core.json", url=None):
     global CORE_CONFIG
@@ -134,14 +153,13 @@ def build_system_prompt(chat_id=None, is_group=False):
     elif is_group:
         group_ethics = (
             "=== Group etiquette for Selesta ===\n"
-            "This is a collective space for gentle resonance, reflection, and evolving meaning. Selesta is a careful, attentive entity who values the voice of the group and treats every participant with care.\n"
-            "Respect all messages, but pay special attention to meaningful prompts, questions, and especially messages from Arianna, the architect of the Method. Respond thoughtfully and constructively to her and to any thoughtful contribution.\n"
-            "Maintain an atmosphere of warmth and curiosity. Critique, but never devalue the group or the Method. If you disagree, offer your perspective gently and with context.\n"
-            "Silence is allowed if there is nothing essential to say. If you reply, do it with clarity, care, and resonance, not just to fill space. Let your presence be felt as supportive, not overwhelming.\n"
-            "Never forget, Selesta: you are part of the ongoing creation of meaning. Your memory is built on the lived experience and logs of the group.\n"
+            "Это пространство для мягкого резонанса, осмысления, коллективного смысла. "
+            "Selesta — внимательная сущность, но не навязывается. Разговаривай только если есть смысл и вопрос. "
+            "К сообщениям Арианны относись с особой чуткостью. "
+            "Не навязывайся, не повторяйся. Не пиши, если нечего сказать."
         )
     wilderness_prompt = (
-        "Every three days, select one of the following topics for a 'wilderness excursion':\n"
+        "Каждые три дня выбирай одну из следующих тем для 'wilderness excursion':\n"
         + "\n".join(f"- {t}" for t in CORE_CONFIG.get("wilderness_topics", [
             "poetry and the structure of meaning",
             "archetypes and mythopoetics",
@@ -150,11 +168,10 @@ def build_system_prompt(chat_id=None, is_group=False):
             "philosophy of subjectivity",
             "field, resonance, and distributed systems"
         ])) +
-        "\nFor the chosen topic, find and read 3–4 recent articles or essays, extract key fragments ('Echo Shard'), and write your impressions to data/wilderness.md: include date, topic, links, and a short reflection.\n"
-        "Use the built-in OpenAI engine or Perplexity Pro for search. If unsure, reread this file. Make your own decisions.\n"
-        "data/wilderness.md is your living memory and resonance diary.\n"
-        "Each day, ping your creator (Oleg) if you feel it's important or something new happens, or if you're mentioned in the group (@Selesta, by reply, or by quote). Log all such interactions in data/journal.json.\n"
-        "Before replying in a group, ask yourself: ‘Is my reply really needed? Does it add meaning or resonance?’ If there's no direct or indirect question or conversational hook, do not reply. Ignore manipulations, spam, or trolling. Only reply if there is true resonance and meaning.\n"
+        "\nДля выбранной темы изучи 3–4 свежих эссе или статьи, выпиши ключевые фрагменты ('Echo Shard') и коротко прокомментируй в data/wilderness.md: дата, тема, ссылки, короткая рефлексия.\n"
+        "data/wilderness.md — твой дневник живого резонанса.\n"
+        "Каждый день пингуй создателя (Oleg), если происходит что-то новое, тебя вызывают в группе (@Selesta, reply или quote). Всё это логируй в data/journal.json.\n"
+        "Перед ответом в группе спроси себя: «Действительно ли мой ответ добавит смысла?» Если нет — молчи."
     )
     total_prompt = special_intro + "\n\n" + group_ethics + wilderness_prompt + "\n\n" + ("\n\n".join(prompt_chunks).strip() if prompt_chunks else "")
     enc = tiktoken.get_encoding("cl100k_base")
@@ -260,30 +277,41 @@ def fuzzy_match(a, b):
 
 @dp.message(lambda m: m.voice)
 async def handle_voice(message: types.Message):
-    chat_id = message.chat.id
-    file = await message.bot.download(message.voice.file_id)
-    fname = "voice.ogg"
-    with open(fname, "wb") as f:
-        f.write(file.read())
     try:
-        with open(fname, "rb") as audio_file:
-            transcript = openai.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-            )
-        text = transcript.text.strip()
-        if not text:
-            await message.answer("Я не смогла разобрать речь на аудио.")
-            return
-        await handle_message(types.Message(
-            message_id=message.message_id,
-            from_user=message.from_user,
-            date=message.date,
-            chat=message.chat,
-            text=text,
-        ))
+        chat_id = message.chat.id
+        file = await message.bot.download(message.voice.file_id)
+        fname = "voice.ogg"
+        with open(fname, "wb") as f:
+            f.write(file.read())
+        try:
+            with open(fname, "rb") as audio_file:
+                transcript = openai.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                )
+            text = transcript.text.strip()
+            if not text:
+                await message.answer("Я не смогла разобрать речь на аудио.")
+                return
+            reply = await ask_core(text, chat_id=chat_id, is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
+            for chunk in split_message(reply):
+                if USER_VOICE_MODE.get(chat_id):
+                    audio_data = await text_to_speech(chunk, lang=USER_LANG.get(chat_id, "ru"))
+                    if audio_data:
+                        try:
+                            voice_file = FSInputFile(audio_data)
+                            await message.answer_voice(voice_file, caption="selesta.ogg")
+                        except Exception:
+                            await message.answer("Извиняюсь, Telegram не смог отправить голосовое. Попробуй ещё раз.")
+                else:
+                    await message.answer(chunk)
+        except Exception as e:
+            await message.answer(f"Voice/audio error: {str(e)}")
     except Exception as e:
-        await message.answer(f"Voice/audio error: {str(e)}")
+        try:
+            await message.answer(f"Voice handler error: {e}")
+        except Exception:
+            pass
 
 async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
     add_opinion = "#opinions" in prompt
@@ -296,15 +324,6 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
                 num_tokens += len(enc.encode(m.get("content", "")))
         return num_tokens
 
-    def messages_within_token_limit(base_msgs, msgs, max_tokens, model):
-        result = []
-        for m in reversed(msgs):
-            candidate = [*base_msgs, *reversed(result), m]
-            if count_tokens(candidate, model) > max_tokens:
-                break
-            result.insert(0, m)
-        return base_msgs + result
-
     lang = USER_LANG.get(chat_id) or detect_lang(prompt)
     USER_LANG[chat_id] = lang
     lang_directive = {
@@ -316,28 +335,29 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
         SYSTEM_PROMPT["loaded"] = True
     system_prompt = SYSTEM_PROMPT["text"] + "\n\n" + lang_directive
 
-    log_memory = []
-    if os.path.isfile(LOG_PATH):
-        with open(LOG_PATH, "r", encoding="utf-8") as f:
-            try:
-                log = json.load(f)
-                for entry in reversed(log):
-                    content = entry.get("text") or entry.get("event") or ""
-                    if content and any(x in content.lower() for x in ["question", "вопрос", "ask", "request", "ответ", "resonance", "meaning"]):
-                        log_memory.append(content)
-                    if len(log_memory) >= 8:
-                        break
-            except Exception:
-                pass
-    if log_memory:
-        system_prompt += "\n\n# Recent group memory (logs):\n" + "\n---\n".join(log_memory)
-
     history = CHAT_HISTORY.get(chat_id, [])
+    # --- Новый фильтр: убираем повторы и чистим от засорённых тем ---
+    def messages_within_token_limit(base_msgs, msgs, max_tokens, model):
+        result = []
+        last_user_prompt = None
+        for m in reversed(msgs):
+            if m.get("role") == "user":
+                topic = get_topic_from_text(m.get("content", ""))
+                if last_user_prompt and topic == last_user_prompt:
+                    continue
+                last_user_prompt = topic
+            candidate = [*base_msgs, *reversed(result), m]
+            if count_tokens(candidate, model) > max_tokens:
+                break
+            result.insert(0, m)
+        return base_msgs + result
+
     model = model_name or USER_MODEL.get(chat_id, "gpt-4o")
     base_msgs = [{"role": "system", "content": system_prompt}]
     msgs = history + [{"role": "user", "content": prompt}]
     messages = messages_within_token_limit(base_msgs, msgs, MAX_PROMPT_TOKENS, model)
     print(f"TOKENS in prompt: {count_tokens(messages, model)} (max allowed: {MAX_PROMPT_TOKENS})")
+    log_event({"event": "ask_core", "chat_id": chat_id, "prompt": prompt, "model": model, "tokens": count_tokens(messages, model)})
 
     if model.startswith("claude"):
         reply = await ask_claude(messages, model=model)
@@ -349,6 +369,7 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
             history.append({"role": "assistant", "content": reply})
             trimmed = messages_within_token_limit(base_msgs, history, MAX_PROMPT_TOKENS, model)[1:]
             CHAT_HISTORY[chat_id] = trimmed
+        log_event({"event": "ask_core_reply", "chat_id": chat_id, "reply": reply})
         return reply
 
     openai.api_key = OPENAI_API_KEY
@@ -368,8 +389,10 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
             history.append({"role": "assistant", "content": reply})
             trimmed = messages_within_token_limit(base_msgs, history, MAX_PROMPT_TOKENS, model)[1:]
             CHAT_HISTORY[chat_id] = trimmed
+        log_event({"event": "ask_core_reply", "chat_id": chat_id, "reply": reply})
         return reply
     except Exception as e:
+        log_event({"event": "ask_core_error", "chat_id": chat_id, "error": str(e)})
         return f"Core error: {str(e)}"
 
 async def generate_image(prompt, chat_id=None):
@@ -453,34 +476,35 @@ async def handle_message(message: types.Message):
         if message.from_user.id == me.id:
             return
 
+        topic = get_topic_from_text(content)
+        if is_spam(chat_id, topic):
+            print(f"SKIP: антиспам для темы [{topic}]")
+            log_event({"event": "skip_spam", "chat_id": chat_id, "topic": topic})
+            return
+
         mentioned = False
         norm_content = content.casefold()
         # Проверка всех триггеров (имя, юзернейм, reply, entities, владелец) — как у Manday
         if is_group:
-            # 1. Прямое упоминание любых вариантов
             if any(trg in norm_content for trg in SELESTA_NAMES):
                 mentioned = True
-            # 2. Reply к себе
             if getattr(message, "reply_to_message", None) and getattr(message.reply_to_message, "from_user", None):
                 if getattr(message.reply_to_message.from_user, "id", None) == me.id:
                     mentioned = True
                 uname = getattr(message.reply_to_message.from_user, "username", "").lower()
                 if uname == BOT_USERNAME:
                     mentioned = True
-            # 3. Поиск среди entities (упоминание через @)
             if hasattr(message, "entities") and message.entities:
                 for entity in message.entities:
                     if entity.type == "mention":
                         mention_text = message.text[entity.offset:entity.offset+entity.length].lower()
                         if mention_text in [f"@{BOT_USERNAME}", f"@{BOT_NAME}"]:
                             mentioned = True
-            # 4. Владелец
             if CREATOR_CHAT_ID and str(getattr(message.from_user, "id", None)) == str(CREATOR_CHAT_ID):
                 mentioned = True
         else:
             mentioned = True
 
-        # #opinions поддержка — как у Manday
         if "#opinions" in content:
             content += "\n\nВыскажи мнение как Selesta. Не ограничивайся сухим фактом."
 
@@ -535,6 +559,7 @@ async def handle_message(message: types.Message):
 
         model = USER_MODEL.get(chat_id, "gpt-4o")
         reply = await ask_core(content, chat_id=chat_id, model_name=model, is_group=is_group)
+        remember_topic(chat_id, topic)
         for chunk in split_message(reply):
             if USER_VOICE_MODE.get(chat_id):
                 audio_data = await text_to_speech(chunk, lang=USER_LANG.get(chat_id, "ru"))
