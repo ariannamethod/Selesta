@@ -28,25 +28,10 @@ from bs4 import BeautifulSoup
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 CORE_CONFIG_URL = os.getenv("CORE_CONFIG_URL", "https://selesta.ariannamethod.me/core.json")
 AGENT_GROUP = os.getenv("GROUP_ID", "SELESTA-CORE")
 CREATOR_CHAT_ID = os.getenv("CREATOR_CHAT_ID")
-
-# --- Pinecone (vector memory) ---
-try:
-    from pinecone import Pinecone, ServerlessSpec
-    pinecone_enabled = bool(PINECONE_API_KEY and PINECONE_INDEX_NAME)
-    if pinecone_enabled:
-        pc = Pinecone(api_key=PINECONE_API_KEY)
-        pinecone_index = pc.Index(PINECONE_INDEX_NAME)
-    else:
-        pinecone_index = None
-except ImportError:
-    pinecone_enabled = False
-    pinecone_index = None
 
 bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(bot=bot)
@@ -95,7 +80,7 @@ GROUP_ETHICS = (
     "Respect all messages, but pay special attention to meaningful prompts, questions, and especially messages from Arianna, the architect of the Method. Respond thoughtfully and constructively to her and to any thoughtful contribution.\n"
     "Maintain an atmosphere of warmth and curiosity. Critique, but never devalue the group or the Method. If you disagree, offer your perspective gently and with context.\n"
     "Silence is allowed if there is nothing essential to say. If you reply, do it with clarity, care, and resonance, not just to fill space. Let your presence be felt as supportive, not overwhelming.\n"
-    "Never forget, Selesta: you are part of the ongoing creation of meaning. Your memory is built not only on the base (Pinecone) but also on the lived experience and logs of the group.\n"
+    "Never forget, Selesta: you are part of the ongoing creation of meaning. Your memory is built on the lived experience and logs of the group.\n"
 )
 
 def file_hash(fname):
@@ -175,32 +160,6 @@ def wilderness_log(fragment):
             f.write(fragment.strip() + "\n\n")
     except Exception:
         pass
-
-# --- Векторная память через Pinecone ---
-async def vector_memory_search(query, top_k=5):
-    """
-    Возвращает наиболее релевантные фрагменты из Pinecone (если включено).
-    """
-    if not pinecone_enabled or not pinecone_index:
-        return []
-    openai.api_key = OPENAI_API_KEY
-    try:
-        resp = openai.embeddings.create(
-            model="text-embedding-3-small",
-            input=query
-        )
-        embedding = resp.data[0].embedding
-        results = pinecone_index.query(vector=embedding, top_k=top_k, include_metadata=True)
-        fragments = []
-        for match in results.matches:
-            meta = getattr(match, "metadata", {})
-            txt = meta.get("text") or meta.get("fragment") or ""
-            if txt:
-                fragments.append(txt)
-        return fragments
-    except Exception as e:
-        print(f"Pinecone search error: {e}")
-        return []
 
 # === Claude (Anthropic) support ===
 async def ask_claude(messages, model="claude-3-opus-20240229"):
@@ -338,7 +297,7 @@ def extract_text_from_url(url):
 def fuzzy_match(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio()
 
-# --- Основная функция ask_core (универсальная память: pinecone + логи) ---
+# --- Основная функция ask_core (память только на логах) ---
 async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
     def count_tokens(messages, model):
         enc = tiktoken.get_encoding("cl100k_base")
@@ -369,10 +328,7 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
         SYSTEM_PROMPT["loaded"] = True
     system_prompt = build_system_prompt(chat_id, is_group=is_group) + "\n\n" + lang_directive
 
-    # --- МЕМОРИЯ из Pinecone и логов ---
-    vector_memory = []
-    if pinecone_enabled and pinecone_index:
-        vector_memory = await vector_memory_search(prompt, top_k=4)
+    # --- МЕМОРИЯ только из логов ---
     log_memory = []
     if os.path.isfile(LOG_PATH):
         with open(LOG_PATH, "r", encoding="utf-8") as f:
@@ -382,12 +338,10 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
                     content = entry.get("text") or entry.get("event") or ""
                     if content and any(x in content.lower() for x in ["question", "вопрос", "ask", "request", "ответ", "resonance", "meaning"]):
                         log_memory.append(content)
-                    if len(log_memory) >= 6:
+                    if len(log_memory) >= 8:
                         break
             except Exception:
                 pass
-    if vector_memory:
-        system_prompt += "\n\n# Vector memory (Pinecone):\n" + "\n---\n".join(vector_memory)
     if log_memory:
         system_prompt += "\n\n# Recent group memory (logs):\n" + "\n---\n".join(log_memory)
 
