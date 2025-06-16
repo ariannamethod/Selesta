@@ -1,16 +1,15 @@
-def split_message(text, max_length=4000):
+import re
+
+def limit_paragraphs(text, max_paragraphs=4):
     """
-    Splits a long message into parts that fit within Telegram message limits.
+    Trims the input text to at most N paragraphs.
+    A paragraph is considered as a block separated by empty lines or newlines.
     """
-    result = []
-    while len(text) > max_length:
-        idx = text.rfind('\n', 0, max_length)
-        if idx == -1:
-            idx = max_length
-        result.append(text[:idx])
-        text = text[idx:].lstrip('\n')
-    if text:
-        result.append(text)
-    if not result:
-        return ["[Empty message.]"]
-    return result
+    # Split by double newlines, bullet points, or at least by single \n if everything is glued together.
+    paragraphs = re.split(r'(?:\n\s*\n|\r\n\s*\r\n|(?<=\n)-\s|\r\s*\r)', text)
+    if len(paragraphs) == 1:
+        paragraphs = text.split('\n')
+    limited = [p.strip() for p in paragraphs if p.strip()][:max_paragraphs]
+    if not limited:
+        return "[Empty response. Selesta could not extract any content.]"
+    return '\n\n'.join(limited)
