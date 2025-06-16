@@ -9,3 +9,6 @@ pypdf
 tiktoken
 beautifulsoup4
 pillow
+pinecone
+httpx
+requests
