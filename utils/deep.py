@@ -4,15 +4,15 @@ from typing import Optional
 
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 
-# Current valid Sonar models (2025)
+# Актуальные модели Sonar (2025)
 SONAR_MODELS = {
     "small_chat": "sonar-small-chat",
     "medium_chat": "sonar-medium-chat",
     "large_chat": "sonar-large-chat",
-    # If Perplexity adds more, extend here.
 }
 
-DEFAULT_SONAR_MODEL = SONAR_MODELS.get("large_chat", "sonar-medium-chat")
+# Лучше medium по дефолту
+DEFAULT_SONAR_MODEL = SONAR_MODELS.get("medium_chat", "sonar-medium-chat")
 
 async def deep_sonar(
     prompt: str,
@@ -27,10 +27,10 @@ async def deep_sonar(
     Returns the model's response text, or a formatted error.
     """
     if not PERPLEXITY_API_KEY:
-        return "[Perplexity API key not set.]"
+        return "⚠️ [Perplexity API key not set.]"
     permitted_models = set(SONAR_MODELS.values())
     if model not in permitted_models:
-        return f"[Invalid Sonar model '{model}'. Permitted models: {', '.join(permitted_models)}.]"
+        return f"⚠️ [Invalid Sonar model '{model}'. Permitted models: {', '.join(permitted_models)}.]"
     url = "https://api.perplexity.ai/chat/completions"
     headers = {
         "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
@@ -54,13 +54,16 @@ async def deep_sonar(
             response = await client.post(url, headers=headers, json=data)
             response.raise_for_status()
             resp_json = response.json()
-            return resp_json.get("choices", [{}])[0].get("message", {}).get("content", "[Empty response from Sonar.]")
+            result = resp_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if not result or result.strip() in ("[Empty response from Sonar.]", ""):
+                return "🔮"
+            return result.strip()
     except httpx.HTTPStatusError as e:
         try:
             err_json = e.response.json()
             err_message = err_json.get("error", {}).get("message", "")
-            return f"\nSonar API Error:\nStatus: {e.response.status_code}\nMessage: {err_message}\n"
+            return f"⚠️ Sonar API Error: {err_message or e.response.text}"
         except Exception:
-            return f"\nSonar API Error:\nStatus: {e.response.status_code}\nBody: {e.response.text}\n"
+            return f"⚠️ Sonar API Error: HTTP {e.response.status_code}"
     except Exception as e:
-        return f"[Sonar API error: {e}]"
+        return f"⚠️ Sonar API error: {e}"
