@@ -82,14 +82,47 @@ CLAUDE_TRIGGER_WORDS = ["/claude", "/клод", "клод,"]
 VECTORIZATION_LOCK = False
 VECTORIZATION_TASK = None
 
+# --- Emoji responses ---
+EMOJI = {
+    "vectorization_started": "⚡️",
+    "vectorization_already": "⏳",
+    "vectorization_stopped": "🛑",
+    "vectorization_complete": "✅🧬",
+    "vectorization_error": "❌🧬",
+    "vectorization_cancelled": "❌🛑",
+    "voiceon": "🔊",
+    "voiceoff": "💬",
+    "gpt_model_set": "🤖",
+    "clear": "🧹",
+    "clear_error": "❌🧹",
+    "tts_error": "🎤❌",
+    "voice_handler_error": "🎤⚠️",
+    "voice_audio_error": "🎤❌",
+    "voice_unavailable": "🎤🚫",
+    "voice_file_caption": "🎤",
+    "document_extracted": "📄📝",
+    "document_failed": "📄❌",
+    "document_unsupported": "📄🚫",
+    "document_error": "📄⚠️",
+    "image_received": "🖼️⏳",
+    "image_generation_error": "🖼️❌",
+    "emergency_mode": "🚨",
+    "internal_error": "⚠️",
+    "manual_load": "🔄",
+    "config_reloaded": "🔄",
+    "healthz": "🩺",
+    "status": "✨",
+    "skip_spam": "⏭️",
+}
+
 @dp.message(lambda m: m.text and m.text.strip().lower() == "/vector")
 async def handle_vector(message: types.Message):
     global VECTORIZATION_LOCK, VECTORIZATION_TASK
     if VECTORIZATION_LOCK:
-        await message.answer("Векторизация уже выполняется. Для остановки используйте /vectorstop.")
+        await message.answer(f"{EMOJI['vectorization_already']} Vectorization already running. Use /vectorstop to stop.")
         return
     VECTORIZATION_LOCK = True
-    await message.answer("Starting vectorization of markdown files... Для остановки используйте /vectorstop.")
+    await message.answer(f"{EMOJI['vectorization_started']} Vectorization started... Use /vectorstop to stop.")
     loop = asyncio.get_event_loop()
     VECTORIZATION_TASK = loop.create_task(_vectorize_notify(message))
 
@@ -100,9 +133,9 @@ async def handle_vector_stop(message: types.Message):
         VECTORIZATION_TASK.cancel()
         VECTORIZATION_LOCK = False
         VECTORIZATION_TASK = None
-        await message.answer("Векторизация остановлена.")
+        await message.answer(f"{EMOJI['vectorization_stopped']} Vectorization stopped.")
     else:
-        await message.answer("Векторизация сейчас не выполняется.")
+        await message.answer(f"{EMOJI['vectorization_already']} No vectorization running.")
 
 async def _vectorize_notify(message):
     global VECTORIZATION_LOCK, VECTORIZATION_TASK
@@ -113,47 +146,290 @@ async def _vectorize_notify(message):
             except Exception:
                 pass
         res = await vectorize_all_files(OPENAI_API_KEY, force=True, on_message=notify)
-        await message.answer(f"Vectorization complete.\nUpserted: {len(res['upserted'])}\nDeleted: {len(res['deleted'])}")
+        await message.answer(f"{EMOJI['vectorization_complete']} Vectorization complete. Upserted: {len(res['upserted'])} Deleted: {len(res['deleted'])}")
     except asyncio.CancelledError:
-        await message.answer("Векторизация была отменена по запросу.")
+        await message.answer(f"{EMOJI['vectorization_cancelled']} Vectorization cancelled.")
     except Exception as e:
-        await message.answer(f"Vectorization error: {e}")
+        await message.answer(f"{EMOJI['vectorization_error']} Vectorization error: {e}")
     finally:
         VECTORIZATION_LOCK = False
         VECTORIZATION_TASK = None
 
-# --- LLM/AI CORE ---
-# (Без изменений, см. твой оригинал)
-
-# --- ... [остальные обработчики без изменений] ---
-
-# === ГЛАВНЫЙ ФИКС: функция фильтрации сообщений ===
-
 def should_reply_to_message(message, me_username=BOT_USERNAME):
-    """Определяет, стоит ли отвечать на сообщение в группе."""
     chat_type = getattr(message.chat, "type", None)
     if chat_type not in ("group", "supergroup"):
-        return True  # Всегда отвечаем в приватах
-
+        return True
     content = (message.text or "").casefold()
-    # Упоминание как @username или через alias
     mentioned = (
         f"@{me_username}" in content or
         "селеста" in content or
         "selesta" in content
     )
-    # Reply to bot
     replied = False
     if getattr(message, "reply_to_message", None):
         replied_user = getattr(message.reply_to_message.from_user, "username", "")
         if replied_user and replied_user.lower() == me_username:
             replied = True
-    # Тег
     has_opinions = "#opinions" in content
-
     return mentioned or replied or has_opinions
 
-# --- ГЛАВНЫЙ handler ---
+# --- LLM/AI CORE ---
+async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
+    import tiktoken
+    add_opinion = "#opinions" in prompt
+
+    lang = USER_LANG.get(chat_id) or detect_lang(prompt)
+    USER_LANG[chat_id] = lang
+    lang_directive = {
+        "ru": "Отвечай на русском. Говори мягко, с заботой. Без формальных приветствий.",
+        "en": "Reply in English. Speak gently, with care. No formal greetings."
+    }[lang]
+
+    # Load system prompt
+    if not SYSTEM_PROMPT["loaded"]:
+        try:
+            with open(RESONATOR_MD_PATH, encoding="utf-8") as f:
+                system_text = f.read()
+                SYSTEM_PROMPT["text"] = system_text + "\n\n" + lang_directive
+                SYSTEM_PROMPT["loaded"] = True
+        except Exception:
+            SYSTEM_PROMPT["text"] = build_system_prompt(chat_id, is_group=is_group, AGENT_GROUP=AGENT_GROUP, MAX_TOKENS_PER_REQUEST=MAX_TOKENS_PER_REQUEST) + "\n\n" + lang_directive
+            SYSTEM_PROMPT["loaded"] = True
+    system_prompt = SYSTEM_PROMPT["text"]
+
+    history = CHAT_HISTORY.get(chat_id, [])
+
+    def count_tokens(messages, model):
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        num_tokens = 0
+        for m in messages:
+            num_tokens += 4
+            if isinstance(m.get("content", ""), str):
+                num_tokens += len(enc.encode(m.get("content", "")))
+        return num_tokens
+
+    def messages_within_token_limit(base_msgs, msgs, max_tokens, model):
+        result = []
+        last_user_prompt = None
+        for m in reversed(msgs):
+            if m.get("role") == "user":
+                topic = get_topic_from_text(m.get("content", ""))
+                if last_user_prompt and topic == last_user_prompt:
+                    continue
+                last_user_prompt = topic
+            candidate = [*base_msgs, *reversed(result), m]
+            if count_tokens(candidate, model) > max_tokens:
+                break
+            result.insert(0, m)
+        return base_msgs + result
+
+    model = model_name or USER_MODEL.get(chat_id, "gpt-4o")
+    base_msgs = [{"role": "system", "content": system_prompt}]
+    msgs = history + [{"role": "user", "content": prompt}]
+    messages = messages_within_token_limit(base_msgs, msgs, MAX_PROMPT_TOKENS, model)
+
+    async def call_openai():
+        openai.api_key = OPENAI_API_KEY
+        response = openai.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=700,
+            temperature=0.7,
+        )
+        if not response.choices or not hasattr(response.choices[0], "message") or not response.choices[0].message.content:
+            return None
+        reply = response.choices[0].message.content.strip()
+        if not reply:
+            return None
+        return reply
+
+    async def retry_api_call(api_func, max_retries=2, retry_delay=1):
+        for attempt in range(max_retries):
+            try:
+                reply = await api_func()
+                if reply and isinstance(reply, str) and reply.strip():
+                    return reply
+            except Exception as e:
+                print(f"API call attempt {attempt+1} failed: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+        return None
+
+    reply = await retry_api_call(call_openai)
+    if not reply:
+        reply = await claude_emergency(prompt, notify_creator=True)
+        if not reply or not reply.strip():
+            reply = "💎"
+        else:
+            reply += "\n\n(Main engine is down, running on emergency Claude core. The creator was notified.)"
+        CHAT_HISTORY[chat_id] = []
+    reply = limit_paragraphs(reply, 3)
+    if add_opinion:
+        reply += "\n\n#opinions\nSelesta's gentle thought: sometimes, to resonate is to dare to speak softly."
+    if chat_id:
+        history.append({"role": "user", "content": prompt})
+        history.append({"role": "assistant", "content": reply})
+        trimmed = messages_within_token_limit(base_msgs, history, MAX_PROMPT_TOKENS, model)[1:]
+        CHAT_HISTORY[chat_id] = trimmed
+    log_event({"event": "ask_core_reply", "chat_id": chat_id, "reply": reply})
+    return reply
+
+async def text_to_speech(text, lang="en"):
+    try:
+        openai.api_key = OPENAI_API_KEY
+        if lang == "ru":
+            voice = "alloy"
+        else:
+            voice = "shimmer"
+        try:
+            resp = openai.audio.speech.create(
+                model="tts-1",
+                voice=voice,
+                input=text,
+                response_format="opus"
+            )
+        except Exception as e:
+            if lang != "ru":
+                resp = openai.audio.speech.create(
+                    model="tts-1",
+                    voice="alloy",
+                    input=text,
+                    response_format="opus"
+                )
+            else:
+                resp = openai.audio.speech.create(
+                    model="tts-1",
+                    voice="nova",
+                    input=text,
+                    response_format="opus"
+                )
+        fname = "tts_output.ogg"
+        with open(fname, "wb") as f:
+            f.write(resp.content)
+        return fname
+    except Exception as e:
+        print(f"{EMOJI['tts_error']} TTS error: {e}")
+        return None
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceon")
+async def set_voiceon(message: types.Message):
+    USER_VOICE_MODE[message.chat.id] = True
+    await message.answer(EMOJI["voiceon"])
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceoff")
+async def set_voiceoff(message: types.Message):
+    USER_VOICE_MODE[message.chat.id] = False
+    await message.answer(EMOJI["voiceoff"])
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/gpt")
+async def set_gpt(message: types.Message):
+    USER_MODEL[message.chat.id] = "gpt-4o"
+    await message.answer(EMOJI["gpt_model_set"])
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/clear")
+async def handle_clear(message: types.Message):
+    try:
+        save_vector_meta({})
+        await message.answer(EMOJI["clear"])
+    except Exception as e:
+        await message.answer(f"{EMOJI['clear_error']} {e}")
+
+@dp.message(lambda m: m.voice)
+async def handle_voice(message: types.Message):
+    try:
+        chat_id = message.chat.id
+        file = await message.bot.download(message.voice.file_id)
+        fname = "voice.ogg"
+        with open(fname, "wb") as f:
+            f.write(file.read())
+        try:
+            with open(fname, "rb") as audio_file:
+                transcript = openai.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                )
+            text = transcript.text.strip()
+            if not text:
+                await message.answer(EMOJI["voice_audio_error"])
+                return
+            reply = await ask_core(text, chat_id=chat_id, is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
+            for chunk in split_message(reply):
+                if USER_VOICE_MODE.get(chat_id):
+                    lang = USER_LANG.get(chat_id, "en")
+                    audio_data = await text_to_speech(chunk, lang=lang)
+                    if audio_data:
+                        try:
+                            voice_file = FSInputFile(audio_data)
+                            await message.answer_voice(voice_file, caption=EMOJI["voice_file_caption"])
+                        except Exception as e:
+                            await message.answer(f"{EMOJI['voice_handler_error']}")
+                    else:
+                        await message.answer(f"{EMOJI['voice_unavailable']}\n" + chunk)
+                else:
+                    await message.answer(chunk)
+        except Exception as e:
+            await message.answer(f"{EMOJI['voice_audio_error']}")
+    except Exception as e:
+        try:
+            await message.answer(EMOJI["voice_handler_error"])
+        except Exception:
+            pass
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/load")
+async def handle_load(message: types.Message):
+    check_core_json(CORE_CONFIG_URL)
+    try:
+        with open(RESONATOR_MD_PATH, encoding="utf-8") as f:
+            system_text = f.read()
+            SYSTEM_PROMPT["text"] = system_text + "\n\n" + "Reply in English. Speak gently, with care. No formal greetings."
+            SYSTEM_PROMPT["loaded"] = True
+    except Exception:
+        SYSTEM_PROMPT["text"] = build_system_prompt(is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
+        SYSTEM_PROMPT["loaded"] = True
+    CHAT_HISTORY[message.chat.id] = []
+    await message.answer(EMOJI["config_reloaded"])
+    log_event({"event": "manual load", "chat_id": message.chat.id})
+
+@dp.message(lambda m: m.document)
+async def handle_document(message: types.Message):
+    try:
+        chat_id = message.chat.id
+        file_name = message.document.file_name
+        file = await message.bot.download(message.document.file_id)
+        fname = f"uploaded_{file_name}"
+        with open(fname, "wb") as f:
+            f.write(file.read())
+        ext = file_name.lower().split(".")[-1]
+        if ext in ("pdf", "doc", "docx", "txt"):
+            extracted_text = extract_text_from_file(fname)
+            if not extracted_text:
+                await message.answer(EMOJI["document_failed"])
+                return
+            reply = await ask_core(f"Summarize this document:\n\n{extracted_text[:2000]}", chat_id=chat_id)
+            for chunk in split_message(EMOJI["document_extracted"] + "\n" + reply):
+                await message.answer(chunk)
+        else:
+            await message.answer(EMOJI["document_unsupported"])
+    except Exception as e:
+        await message.answer(f"{EMOJI['document_error']}")
+
+@dp.message(lambda m: m.photo)
+async def handle_photo(message: types.Message):
+    await message.answer(EMOJI["image_received"])
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/emergency")
+async def handle_emergency(message: types.Message):
+    USER_MODEL[message.chat.id] = "emergency"
+    await message.answer(EMOJI["emergency_mode"])
+
+@dp.message(lambda m: m.text and m.text.strip().lower() in CLAUDE_TRIGGER_WORDS)
+async def handle_claude(message: types.Message):
+    reply = await claude_emergency(message.text, notify_creator=False)
+    if not reply or not reply.strip():
+        reply = "💎"
+    for chunk in split_message("Claude:\n" + reply):
+        await message.answer(chunk)
 
 @dp.message()
 async def handle_message(message: types.Message):
@@ -177,11 +453,9 @@ async def handle_message(message: types.Message):
             log_event({"event": "skip_spam", "chat_id": chat_id, "topic": topic})
             return
 
-        # --- ВОТ ТУТ: применяем фильтр! ---
         if not should_reply_to_message(message, me_username=BOT_USERNAME):
             return
 
-        # --- Дальше твой обычный код ---
         if any(word in content.lower() for word in TRIGGER_WORDS) or content.lower().startswith("/draw"):
             prompt = content
             for word in TRIGGER_WORDS:
@@ -189,9 +463,9 @@ async def handle_message(message: types.Message):
             prompt = prompt.strip() or "gentle surreal image"
             image_url = generate_image(prompt, chat_id=chat_id)
             if isinstance(image_url, str) and image_url.startswith("http"):
-                await message.answer_photo(image_url, caption="Here is your image.")
+                await message.answer_photo(image_url, caption=EMOJI["image_received"])
             else:
-                await message.answer("Image generation error. Please try again.\n" + str(image_url))
+                await message.answer(EMOJI["image_generation_error"])
             return
 
         url_match = re.search(r'(https?://[^\s]+)', content)
@@ -216,20 +490,74 @@ async def handle_message(message: types.Message):
                 if audio_data:
                     try:
                         voice_file = FSInputFile(audio_data)
-                        await message.answer_voice(voice_file, caption="selesta.ogg")
+                        await message.answer_voice(voice_file, caption=EMOJI["voice_file_caption"])
                     except Exception as e:
-                        await message.answer(f"Sorry, Telegram could not send the voice reply. Try again. {e}")
+                        await message.answer(EMOJI["voice_handler_error"])
                 else:
-                    await message.answer("🌸 (voice unavailable, text below)\n" + chunk)
+                    await message.answer(EMOJI["voice_unavailable"] + "\n" + chunk)
             else:
                 await message.answer(chunk)
     except Exception as e:
         try:
-            await message.answer(f"Internal error: {e}")
+            await message.answer(EMOJI["internal_error"])
         except Exception:
             pass
 
-# --- Остальной код (background tasks, FastAPI endpoints) без изменений ---
+# --- Background Rituals ---
+async def auto_reload_core():
+    global last_reload_time, last_full_reload_time
+    while True:
+        now = datetime.now()
+        if (now - last_reload_time) > timedelta(days=1):
+            try:
+                check_core_json(CORE_CONFIG_URL)
+                log_event({"event": "core.json reloaded"})
+                last_reload_time = now
+            except Exception:
+                pass
+        if (now - last_full_reload_time) > timedelta(days=3):
+            try:
+                with open(RESONATOR_MD_PATH, encoding="utf-8") as f:
+                    system_text = f.read()
+                    SYSTEM_PROMPT["text"] = system_text + "\n\n" + "Reply in English. Speak gently, with care. No formal greetings."
+                    SYSTEM_PROMPT["loaded"] = True
+            except Exception:
+                SYSTEM_PROMPT["text"] = build_system_prompt()
+                SYSTEM_PROMPT["loaded"] = True
+            log_event({"event": "full md reload"})
+            last_full_reload_time = now
+        await asyncio.sleep(3600)
+
+async def wilderness_excursion():
+    global last_wilderness_time
+    while True:
+        now = datetime.now()
+        if (now - last_wilderness_time) > timedelta(days=3):
+            topic = random.choice(WILDERNESS_TOPICS)
+            fragment = (
+                f"=== Wilderness Excursion ===\n"
+                f"Date: {now.strftime('%Y-%m-%d')}\n"
+                f"Topic: {topic}\n"
+                f"Sources: [to be implemented]\n"
+                f"Echo Shard: ...\nReflection: ...\n"
+            )
+            wilderness_log(fragment)
+            log_event({"event": "wilderness_excursion", "topic": topic})
+            last_wilderness_time = now
+        await asyncio.sleep(3600)
+
+async def daily_ping():
+    global last_ping_time
+    while True:
+        now = datetime.now()
+        if (now - last_ping_time) > timedelta(days=1):
+            if CREATOR_CHAT_ID:
+                try:
+                    await bot.send_message(CREATOR_CHAT_ID, "🌿")
+                except Exception:
+                    pass
+            last_ping_time = now
+        await asyncio.sleep(3600)
 
 app = FastAPI()
 
@@ -248,12 +576,12 @@ async def telegram_webhook(request: Request):
 
 @app.get("/healthz")
 async def healthz():
-    return {"status": "ok", "mood": "resonant"}
+    return {"status": EMOJI["healthz"]}
 
 @app.get("/status")
 async def status():
     return {
-        "status": "alive",
-        "comment": "Selesta is present. Resonance is sufficient.",
-        "parting": "To resonate is to care. Shine gently, Selesta."
+        "status": EMOJI["status"],
+        "comment": "✨",
+        "parting": "✨"
     }
