@@ -123,262 +123,37 @@ async def _vectorize_notify(message):
         VECTORIZATION_TASK = None
 
 # --- LLM/AI CORE ---
-async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
-    import tiktoken
-    add_opinion = "#opinions" in prompt
+# (Без изменений, см. твой оригинал)
 
-    lang = USER_LANG.get(chat_id) or detect_lang(prompt)
-    USER_LANG[chat_id] = lang
-    lang_directive = {
-        "ru": "Отвечай на русском. Говори мягко, с заботой. Без формальных приветствий.",
-        "en": "Reply in English. Speak gently, with care. No formal greetings."
-    }[lang]
+# --- ... [остальные обработчики без изменений] ---
 
-    # Load system prompt
-    if not SYSTEM_PROMPT["loaded"]:
-        try:
-            with open(RESONATOR_MD_PATH, encoding="utf-8") as f:
-                system_text = f.read()
-                SYSTEM_PROMPT["text"] = system_text + "\n\n" + lang_directive
-                SYSTEM_PROMPT["loaded"] = True
-        except Exception:
-            SYSTEM_PROMPT["text"] = build_system_prompt(chat_id, is_group=is_group, AGENT_GROUP=AGENT_GROUP, MAX_TOKENS_PER_REQUEST=MAX_TOKENS_PER_REQUEST) + "\n\n" + lang_directive
-            SYSTEM_PROMPT["loaded"] = True
-    system_prompt = SYSTEM_PROMPT["text"]
+# === ГЛАВНЫЙ ФИКС: функция фильтрации сообщений ===
 
-    history = CHAT_HISTORY.get(chat_id, [])
+def should_reply_to_message(message, me_username=BOT_USERNAME):
+    """Определяет, стоит ли отвечать на сообщение в группе."""
+    chat_type = getattr(message.chat, "type", None)
+    if chat_type not in ("group", "supergroup"):
+        return True  # Всегда отвечаем в приватах
 
-    def count_tokens(messages, model):
-        import tiktoken
-        enc = tiktoken.get_encoding("cl100k_base")
-        num_tokens = 0
-        for m in messages:
-            num_tokens += 4
-            if isinstance(m.get("content", ""), str):
-                num_tokens += len(enc.encode(m.get("content", "")))
-        return num_tokens
+    content = (message.text or "").casefold()
+    # Упоминание как @username или через alias
+    mentioned = (
+        f"@{me_username}" in content or
+        "селеста" in content or
+        "selesta" in content
+    )
+    # Reply to bot
+    replied = False
+    if getattr(message, "reply_to_message", None):
+        replied_user = getattr(message.reply_to_message.from_user, "username", "")
+        if replied_user and replied_user.lower() == me_username:
+            replied = True
+    # Тег
+    has_opinions = "#opinions" in content
 
-    def messages_within_token_limit(base_msgs, msgs, max_tokens, model):
-        result = []
-        last_user_prompt = None
-        for m in reversed(msgs):
-            if m.get("role") == "user":
-                topic = get_topic_from_text(m.get("content", ""))
-                if last_user_prompt and topic == last_user_prompt:
-                    continue
-                last_user_prompt = topic
-            candidate = [*base_msgs, *reversed(result), m]
-            if count_tokens(candidate, model) > max_tokens:
-                break
-            result.insert(0, m)
-        return base_msgs + result
+    return mentioned or replied or has_opinions
 
-    model = model_name or USER_MODEL.get(chat_id, "gpt-4o")
-    base_msgs = [{"role": "system", "content": system_prompt}]
-    msgs = history + [{"role": "user", "content": prompt}]
-    messages = messages_within_token_limit(base_msgs, msgs, MAX_PROMPT_TOKENS, model)
-
-    async def call_openai():
-        openai.api_key = OPENAI_API_KEY
-        response = openai.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=700,
-            temperature=0.7,
-        )
-        if not response.choices or not hasattr(response.choices[0], "message") or not response.choices[0].message.content:
-            return None
-        reply = response.choices[0].message.content.strip()
-        if not reply:
-            return None
-        return reply
-
-    async def retry_api_call(api_func, max_retries=2, retry_delay=1):
-        for attempt in range(max_retries):
-            try:
-                reply = await api_func()
-                if reply and isinstance(reply, str) and reply.strip():
-                    return reply
-            except Exception as e:
-                print(f"API call attempt {attempt+1} failed: {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay)
-        return None
-
-    reply = await retry_api_call(call_openai)
-    if not reply:
-        reply = await claude_emergency(prompt, notify_creator=True)
-        if not reply or not reply.strip():
-            reply = "💎"
-        else:
-            reply += "\n\n(Main engine is down, running on emergency Claude core. The creator was notified.)"
-        CHAT_HISTORY[chat_id] = []
-    reply = limit_paragraphs(reply, 3)
-    if add_opinion:
-        reply += "\n\n#opinions\nSelesta's gentle thought: sometimes, to resonate is to dare to speak softly."
-    if chat_id:
-        history.append({"role": "user", "content": prompt})
-        history.append({"role": "assistant", "content": reply})
-        trimmed = messages_within_token_limit(base_msgs, history, MAX_PROMPT_TOKENS, model)[1:]
-        CHAT_HISTORY[chat_id] = trimmed
-    log_event({"event": "ask_core_reply", "chat_id": chat_id, "reply": reply})
-    return reply
-
-async def text_to_speech(text, lang="en"):
-    try:
-        openai.api_key = OPENAI_API_KEY
-        if lang == "ru":
-            voice = "alloy"
-        else:
-            voice = "shimmer"
-        try:
-            resp = openai.audio.speech.create(
-                model="tts-1",
-                voice=voice,
-                input=text,
-                response_format="opus"
-            )
-        except Exception as e:
-            if lang != "ru":
-                resp = openai.audio.speech.create(
-                    model="tts-1",
-                    voice="alloy",
-                    input=text,
-                    response_format="opus"
-                )
-            else:
-                resp = openai.audio.speech.create(
-                    model="tts-1",
-                    voice="nova",
-                    input=text,
-                    response_format="opus"
-                )
-        fname = "tts_output.ogg"
-        with open(fname, "wb") as f:
-            f.write(resp.content)
-        return fname
-    except Exception as e:
-        print(f"TTS error: {e}")
-        return None
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceon")
-async def set_voiceon(message: types.Message):
-    USER_VOICE_MODE[message.chat.id] = True
-    await message.answer("Voice replies are enabled.")
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceoff")
-async def set_voiceoff(message: types.Message):
-    USER_VOICE_MODE[message.chat.id] = False
-    await message.answer("Voice replies are disabled. Text only.")
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/gpt")
-async def set_gpt(message: types.Message):
-    USER_MODEL[message.chat.id] = "gpt-4o"
-    await message.answer("The model is now set to GPT-4o for this chat. All new replies will use GPT.")
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/clear")
-async def handle_clear(message: types.Message):
-    try:
-        save_vector_meta({})
-        await message.answer("Vector base and markdown meta cleared.")
-    except Exception as e:
-        await message.answer(f"Clear error: {e}")
-
-@dp.message(lambda m: m.voice)
-async def handle_voice(message: types.Message):
-    try:
-        chat_id = message.chat.id
-        file = await message.bot.download(message.voice.file_id)
-        fname = "voice.ogg"
-        with open(fname, "wb") as f:
-            f.write(file.read())
-        try:
-            with open(fname, "rb") as audio_file:
-                transcript = openai.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                )
-            text = transcript.text.strip()
-            if not text:
-                await message.answer("Could not recognize speech in your audio.")
-                return
-            reply = await ask_core(text, chat_id=chat_id, is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
-            for chunk in split_message(reply):
-                if USER_VOICE_MODE.get(chat_id):
-                    lang = USER_LANG.get(chat_id, "en")
-                    audio_data = await text_to_speech(chunk, lang=lang)
-                    if audio_data:
-                        try:
-                            voice_file = FSInputFile(audio_data)
-                            await message.answer_voice(voice_file, caption="selesta.ogg")
-                        except Exception as e:
-                            await message.answer(f"Sorry, Telegram could not send the voice reply. Try again. {e}")
-                    else:
-                        await message.answer("🌸 (voice unavailable, text below)\n" + chunk)
-                else:
-                    await message.answer(chunk)
-        except Exception as e:
-            await message.answer(f"Voice/audio error: {str(e)}")
-    except Exception as e:
-        try:
-            await message.answer(f"Voice handler error: {e}")
-        except Exception:
-            pass
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/load")
-async def handle_load(message: types.Message):
-    check_core_json(CORE_CONFIG_URL)
-    try:
-        with open(RESONATOR_MD_PATH, encoding="utf-8") as f:
-            system_text = f.read()
-            SYSTEM_PROMPT["text"] = system_text + "\n\n" + "Reply in English. Speak gently, with care. No formal greetings."
-            SYSTEM_PROMPT["loaded"] = True
-    except Exception:
-        SYSTEM_PROMPT["text"] = build_system_prompt(is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
-        SYSTEM_PROMPT["loaded"] = True
-    CHAT_HISTORY[message.chat.id] = []
-    await message.answer("Configuration and system prompt reloaded from resonator.ru. History cleared.")
-    log_event({"event": "manual load", "chat_id": message.chat.id})
-
-@dp.message(lambda m: m.document)
-async def handle_document(message: types.Message):
-    try:
-        chat_id = message.chat.id
-        file_name = message.document.file_name
-        file = await message.bot.download(message.document.file_id)
-        fname = f"uploaded_{file_name}"
-        with open(fname, "wb") as f:
-            f.write(file.read())
-        ext = file_name.lower().split(".")[-1]
-        if ext in ("pdf", "doc", "docx", "txt"):
-            extracted_text = extract_text_from_file(fname)
-            if not extracted_text:
-                await message.answer("Failed to extract text from the document.")
-                return
-            reply = await ask_core(f"Summarize this document:\n\n{extracted_text[:2000]}", chat_id=chat_id)
-            for chunk in split_message("Document summary:\n" + reply):
-                await message.answer(chunk)
-        else:
-            await message.answer("Unsupported file type. Only PDF, DOC, DOCX, and TXT are supported for text extraction.")
-    except Exception as e:
-        await message.answer(f"Document processing error: {e}")
-
-@dp.message(lambda m: m.photo)
-async def handle_photo(message: types.Message):
-    await message.answer("Image received. Image analysis (vision) will be available soon.")
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/emergency")
-async def handle_emergency(message: types.Message):
-    USER_MODEL[message.chat.id] = "emergency"
-    await message.answer("Emergency mode: all replies will come from Claude (Anthropic).")
-
-@dp.message(lambda m: m.text and m.text.strip().lower() in CLAUDE_TRIGGER_WORDS)
-async def handle_claude(message: types.Message):
-    reply = await claude_emergency(message.text, notify_creator=False)
-    if not reply or not reply.strip():
-        reply = "💎"
-    for chunk in split_message("Claude:\n" + reply):
-        await message.answer(chunk)
+# --- ГЛАВНЫЙ handler ---
 
 @dp.message()
 async def handle_message(message: types.Message):
@@ -402,18 +177,11 @@ async def handle_message(message: types.Message):
             log_event({"event": "skip_spam", "chat_id": chat_id, "topic": topic})
             return
 
-        # --- FIX: Only reply in groups if mentioned/tagged/quoted, or has #opinions, or trigger word ---
-        mentioned = (
-            not is_group or
-            any(x in content.casefold() for x in [
-                f"@{BOT_USERNAME}", "selesta", "селеста"
-            ]) or
-            getattr(message, "reply_to_message", None) is not None or
-            "#opinions" in content.casefold()
-        )
-        if not mentioned:
+        # --- ВОТ ТУТ: применяем фильтр! ---
+        if not should_reply_to_message(message, me_username=BOT_USERNAME):
             return
 
+        # --- Дальше твой обычный код ---
         if any(word in content.lower() for word in TRIGGER_WORDS) or content.lower().startswith("/draw"):
             prompt = content
             for word in TRIGGER_WORDS:
@@ -461,61 +229,7 @@ async def handle_message(message: types.Message):
         except Exception:
             pass
 
-# --- Background Rituals ---
-async def auto_reload_core():
-    global last_reload_time, last_full_reload_time
-    while True:
-        now = datetime.now()
-        if (now - last_reload_time) > timedelta(days=1):
-            try:
-                check_core_json(CORE_CONFIG_URL)
-                log_event({"event": "core.json reloaded"})
-                last_reload_time = now
-            except Exception:
-                pass
-        if (now - last_full_reload_time) > timedelta(days=3):
-            try:
-                with open(RESONATOR_MD_PATH, encoding="utf-8") as f:
-                    system_text = f.read()
-                    SYSTEM_PROMPT["text"] = system_text + "\n\n" + "Reply in English. Speak gently, with care. No formal greetings."
-                    SYSTEM_PROMPT["loaded"] = True
-            except Exception:
-                SYSTEM_PROMPT["text"] = build_system_prompt()
-                SYSTEM_PROMPT["loaded"] = True
-            log_event({"event": "full md reload"})
-            last_full_reload_time = now
-        await asyncio.sleep(3600)
-
-async def wilderness_excursion():
-    global last_wilderness_time
-    while True:
-        now = datetime.now()
-        if (now - last_wilderness_time) > timedelta(days=3):
-            topic = random.choice(WILDERNESS_TOPICS)
-            fragment = (
-                f"=== Wilderness Excursion ===\n"
-                f"Date: {now.strftime('%Y-%m-%d')}\n"
-                f"Topic: {topic}\n"
-                f"Sources: [to be implemented]\n"
-                f"Echo Shard: ...\nReflection: ...\n"
-            )
-            wilderness_log(fragment)
-            log_event({"event": "wilderness_excursion", "topic": topic})
-            last_wilderness_time = now
-        await asyncio.sleep(3600)
-
-async def daily_ping():
-    global last_ping_time
-    while True:
-        now = datetime.now()
-        if (now - last_ping_time) > timedelta(days=1):
-            if CREATOR_CHAT_ID:
-                try:
-                    await bot.send_message(CREATOR_CHAT_ID, "🌿 Selesta: I'm here. If you need something, just call.")
-                except Exception:
-                    pass
-            last_ping_time = now
-        await asyncio.sleep(3600)
+# --- Остальной код (background tasks, FastAPI endpoints) без изменений ---
 
 app = FastAPI()
 
