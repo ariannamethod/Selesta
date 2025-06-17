@@ -18,8 +18,6 @@ from utils.journal import log_event, wilderness_log
 from utils.resonator import build_system_prompt, WILDERNESS_TOPICS
 from utils.imagine import generate_image
 from utils.lighthouse import check_core_json
-from utils.deep import deep_sonar
-from utils.perplexity import perplexity_search
 from utils.claude import claude_emergency
 from utils.vector_store import vectorize_all_files, save_vector_meta
 
@@ -78,13 +76,6 @@ def detect_lang(text):
 
 TRIGGER_WORDS = [
     "draw", "generate image", "make a picture", "create art", "рисуй", "нарисуй", "сгенерируй", "создай картинку"
-]
-PERPLEXITY_TRIGGER_WORDS = [
-    "let's search the internet", "найди в интернете", "find scientific evidence", 
-    "give scientific references", "давай поищем научные обоснования", "погрузимся глубже", "/perplexity", "/перплекcити"
-]
-SONAR_TRIGGER_WORDS = [
-    "/deep", "/sonar", "sonar:", "deep research", "глубокое исследование", "сонар"
 ]
 CLAUDE_TRIGGER_WORDS = ["/claude", "/клод", "клод,"]
 
@@ -192,13 +183,11 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
 async def text_to_speech(text, lang="en"):
     try:
         openai.api_key = OPENAI_API_KEY
-        # Выбор женского голоса для английского и русского, fallback — alloy (женский, звучит и на русском и на английском)
-        # shimmer — только EN, alloy — универсальный, nova — женский, echo — мужской
-        # Для русского alloy или nova, для английского shimmer, alloy, nova (но shimmer не говорит по-русски)
+        # Женский голос для русского и английского
         if lang == "ru":
-            voice = "alloy"  # alloy и nova — оба женские, alloy чуть теплее
+            voice = "alloy"
         else:
-            voice = "shimmer"  # shimmer — самый женский для EN
+            voice = "shimmer"
         try:
             resp = openai.audio.speech.create(
                 model="tts-1",
@@ -349,7 +338,7 @@ async def handle_document(message: types.Message):
 async def handle_photo(message: types.Message):
     await message.answer("Image received. Image analysis (vision) will be available soon.")
 
-@dp.message(lambda m: m.text and m.text.strip().lower() in ["/emergency", "/авария"])
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/emergency")
 async def handle_emergency(message: types.Message):
     USER_MODEL[message.chat.id] = "emergency"
     await message.answer("Emergency mode: all replies will come from Claude (Anthropic).")
@@ -361,34 +350,6 @@ async def handle_claude(message: types.Message):
         reply = "💎"
     for chunk in split_message("Claude:\n" + reply):
         await message.answer(chunk)
-
-@dp.message(lambda m: m.text and any(word in m.text.lower() for word in PERPLEXITY_TRIGGER_WORDS))
-async def handle_perplexity(message: types.Message):
-    try:
-        # Используем только "pplx-70b-online" (или "pplx-70b-chat" если нужен чат)
-        result = await perplexity_search(message.text, model="pplx-70b-online")
-        if isinstance(result, dict):
-            answer = result.get("answer", "")
-            sources = result.get("sources", [])
-            if sources:
-                links = "\n".join([f"{i+1}. {s.get('title','')}: {s.get('url','')}" for i, s in enumerate(sources)])
-                msg = f"Perplexity:\n{answer}\n\nSources:\n{links}"
-            else:
-                msg = f"Perplexity:\n{answer or '[no answer]'}"
-            await message.answer(msg.strip())
-        else:
-            await message.answer(f"⚠️ Perplexity error:\n{result}")
-    except Exception as e:
-        await message.answer(f"⚠️ Perplexity error:\n{e}")
-
-@dp.message(lambda m: m.text and any(word in m.text.lower() for word in SONAR_TRIGGER_WORDS))
-async def handle_sonar(message: types.Message):
-    try:
-        # Используем только "sonar-medium-chat" (large часто 400)
-        result = await deep_sonar(message.text, model="sonar-medium-chat")
-        await message.answer(f"Sonar:\n{result}")
-    except Exception as e:
-        await message.answer(f"⚠️ Sonar error:\n{e}")
 
 @dp.message()
 async def handle_message(message: types.Message):
@@ -423,8 +384,7 @@ async def handle_message(message: types.Message):
         if not mentioned:
             return
 
-        # --- Perplexity triggers handled in dedicated handler ---
-        # --- Sonar triggers handled in dedicated handler ---
+        # --- Image triggers ---
         if any(word in content.lower() for word in TRIGGER_WORDS) or content.lower().startswith("/draw"):
             prompt = content
             for word in TRIGGER_WORDS:
