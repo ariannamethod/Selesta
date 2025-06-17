@@ -49,7 +49,7 @@ last_full_reload_time = datetime.now()
 last_wilderness_time = datetime.now() - timedelta(days=3)
 last_ping_time = datetime.now() - timedelta(days=1)
 
-# --- Antispam (leave inside as agreed) ---
+# --- Antispam ---
 LAST_TOPIC = {}
 LAST_ANSWER_TIME = {}
 
@@ -70,7 +70,7 @@ def remember_topic(chat_id, topic):
     LAST_ANSWER_TIME[chat_id] = datetime.now()
 
 def detect_lang(text):
-    # Default to English if no Russian characters
+    # Default to English if no Cyrillic characters
     if any(c in text for c in "ёйцукенгшщзхъфывапролджэячсмитьбю"):
         return "ru"
     return "en"
@@ -99,7 +99,7 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
         "en": "Reply in English. Speak gently, with care. No formal greetings."
     }[lang]
 
-    # === System Prompt from resonator.ru ===
+    # Load system prompt
     if not SYSTEM_PROMPT["loaded"]:
         try:
             with open(RESONATOR_MD_PATH, encoding="utf-8") as f:
@@ -157,7 +157,6 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
             return None
         return reply
 
-    # Universal retry logic!
     async def retry_api_call(api_func, max_retries=2, retry_delay=1):
         for attempt in range(max_retries):
             try:
@@ -207,12 +206,12 @@ async def text_to_speech(text, lang="en"):
 @dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceon")
 async def set_voiceon(message: types.Message):
     USER_VOICE_MODE[message.chat.id] = True
-    await message.answer("Now I will reply with voice.")
+    await message.answer("Voice replies are enabled.")
 
 @dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceoff")
 async def set_voiceoff(message: types.Message):
     USER_VOICE_MODE[message.chat.id] = False
-    await message.answer("Voice is disabled. I will reply with text only.")
+    await message.answer("Voice replies are disabled. Text only.")
 
 @dp.message(lambda m: m.voice)
 async def handle_voice(message: types.Message):
@@ -331,25 +330,25 @@ async def handle_message(message: types.Message):
         if not mentioned:
             return
 
-        # --- Perplexity triggers ---
+        # --- Perplexity triggers (SYNC, do NOT await) ---
         if any(word in content.lower() for word in PERPLEXITY_TRIGGER_WORDS):
-            result = await perplexity_search(content, model="pplx-70b-online")
+            result = perplexity_search(content, model="pplx-70b-online")
             await message.answer("Perplexity:\n" + (result if isinstance(result, str) else str(result)))
             return
 
-        # --- Sonar triggers (deep research) ---
+        # --- Sonar triggers (SYNC, do NOT await) ---
         if any(word in content.lower() for word in SONAR_TRIGGER_WORDS):
-            result = await deep_sonar(content)
+            result = deep_sonar(content)
             await message.answer("Sonar:\n" + (result if isinstance(result, str) else str(result)))
             return
 
-        # --- Drawing triggers ---
+        # --- Drawing triggers (SYNC, do NOT await) ---
         if any(word in content.lower() for word in TRIGGER_WORDS) or content.lower().startswith("/draw"):
             prompt = content
             for word in TRIGGER_WORDS:
                 prompt = prompt.replace(word, "", 1)
             prompt = prompt.strip() or "gentle surreal image"
-            image_url = await generate_image(prompt, chat_id=chat_id)
+            image_url = generate_image(prompt, chat_id=chat_id)
             if isinstance(image_url, str) and image_url.startswith("http"):
                 await message.answer_photo(image_url, caption="Here is your image.")
             else:
