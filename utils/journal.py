@@ -6,6 +6,10 @@ LOG_PATH = "data/journal.json"
 WILDERNESS_PATH = "data/wilderness.md"
 
 def log_event(event):
+    """
+    Appends an event (dict) with timestamp to a JSON log file.
+    Silently ignores all errors.
+    """
     try:
         if not os.path.isfile(LOG_PATH):
             with open(LOG_PATH, "w", encoding="utf-8") as f:
@@ -19,6 +23,10 @@ def log_event(event):
         pass
 
 def wilderness_log(fragment):
+    """
+    Appends a text fragment to the wilderness log (Markdown).
+    Silently ignores all errors.
+    """
     try:
         with open(WILDERNESS_PATH, "a", encoding="utf-8") as f:
             f.write(fragment.strip() + "\n\n")
