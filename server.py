@@ -70,12 +70,11 @@ def remember_topic(chat_id, topic):
     LAST_ANSWER_TIME[chat_id] = datetime.now()
 
 def detect_lang(text):
-    # По умолчанию русский, если есть русские буквы
+    # Default to English if no Russian characters
     if any(c in text for c in "ёйцукенгшщзхъфывапролджэячсмитьбю"):
         return "ru"
     return "en"
 
-# --- Триггеры на русском и английском ---
 TRIGGER_WORDS = [
     "draw", "generate image", "make a picture", "create art", "рисуй", "нарисуй", "сгенерируй", "создай картинку"
 ]
@@ -100,14 +99,14 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
         "en": "Reply in English. Speak gently, with care. No formal greetings."
     }[lang]
 
-    # === РЕЗОНАТОР РУ: System Prompt всегда из резонатор.ру ===
+    # === System Prompt from resonator.ru ===
     if not SYSTEM_PROMPT["loaded"]:
         try:
             with open(RESONATOR_MD_PATH, encoding="utf-8") as f:
                 system_text = f.read()
                 SYSTEM_PROMPT["text"] = system_text + "\n\n" + lang_directive
                 SYSTEM_PROMPT["loaded"] = True
-        except Exception as e:
+        except Exception:
             SYSTEM_PROMPT["text"] = build_system_prompt(chat_id, is_group=is_group, AGENT_GROUP=AGENT_GROUP, MAX_TOKENS_PER_REQUEST=MAX_TOKENS_PER_REQUEST) + "\n\n" + lang_directive
             SYSTEM_PROMPT["loaded"] = True
     system_prompt = SYSTEM_PROMPT["text"]
@@ -173,13 +172,12 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
 
     reply = await retry_api_call(call_openai)
     if not reply:
-        # Emergency fallback to Claude
         reply = await claude_emergency(prompt, notify_creator=True)
-        reply += "\n\n(Главный движок временно недоступен. Работаю в аварийном режиме на Claude. Олегу отправлено уведомление.)"
+        reply += "\n\n(Main engine is down, running on emergency Claude core. The creator was notified.)"
         CHAT_HISTORY[chat_id] = []
     reply = limit_paragraphs(reply, 3)
     if add_opinion:
-        reply += "\n\n#opinions\nМягкая мысль Селесты: иногда, чтобы резонировать, нужно просто говорить тихо."
+        reply += "\n\n#opinions\nSelesta's gentle thought: sometimes, to resonate is to dare to speak softly."
     if chat_id:
         history.append({"role": "user", "content": prompt})
         history.append({"role": "assistant", "content": reply})
@@ -188,11 +186,10 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
     log_event({"event": "ask_core_reply", "chat_id": chat_id, "reply": reply})
     return reply
 
-# --- TTS (всегда русский если текст русский) ---
-async def text_to_speech(text, lang="ru"):
+async def text_to_speech(text, lang="en"):
     try:
         openai.api_key = OPENAI_API_KEY
-        voice = "nova" if lang == "ru" else "nova"
+        voice = "nova"
         resp = openai.audio.speech.create(
             model="tts-1",
             voice=voice,
@@ -210,12 +207,12 @@ async def text_to_speech(text, lang="ru"):
 @dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceon")
 async def set_voiceon(message: types.Message):
     USER_VOICE_MODE[message.chat.id] = True
-    await message.answer("Теперь я буду говорить голосом, мягко и по-русски.")
+    await message.answer("Now I will reply with voice.")
 
 @dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceoff")
 async def set_voiceoff(message: types.Message):
     USER_VOICE_MODE[message.chat.id] = False
-    await message.answer("Голос отключён. Я буду отвечать только текстом.")
+    await message.answer("Voice is disabled. I will reply with text only.")
 
 @dp.message(lambda m: m.voice)
 async def handle_voice(message: types.Message):
@@ -233,25 +230,25 @@ async def handle_voice(message: types.Message):
                 )
             text = transcript.text.strip()
             if not text:
-                await message.answer("Не удалось распознать речь на аудио.")
+                await message.answer("Could not recognize speech in your audio.")
                 return
             reply = await ask_core(text, chat_id=chat_id, is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
             for chunk in split_message(reply):
                 if USER_VOICE_MODE.get(chat_id):
-                    audio_data = await text_to_speech(chunk, lang=USER_LANG.get(chat_id, "ru"))
+                    audio_data = await text_to_speech(chunk, lang=USER_LANG.get(chat_id, "en"))
                     if audio_data:
                         try:
                             voice_file = FSInputFile(audio_data)
                             await message.answer_voice(voice_file, caption="selesta.ogg")
                         except Exception:
-                            await message.answer("Ошибка отправки голосового ответа в Telegram. Попробуйте ещё раз.")
+                            await message.answer("Sorry, Telegram could not send the voice reply. Try again.")
                 else:
                     await message.answer(chunk)
         except Exception as e:
-            await message.answer(f"Ошибка обработки аудио: {str(e)}")
+            await message.answer(f"Voice/audio error: {str(e)}")
     except Exception as e:
         try:
-            await message.answer(f"Ошибка голосового обработчика: {e}")
+            await message.answer(f"Voice handler error: {e}")
         except Exception:
             pass
 
@@ -261,42 +258,46 @@ async def handle_load(message: types.Message):
     try:
         with open(RESONATOR_MD_PATH, encoding="utf-8") as f:
             system_text = f.read()
-            SYSTEM_PROMPT["text"] = system_text + "\n\n" + "Отвечай на русском. Говори мягко, с заботой. Без формальных приветствий."
+            SYSTEM_PROMPT["text"] = system_text + "\n\n" + "Reply in English. Speak gently, with care. No formal greetings."
             SYSTEM_PROMPT["loaded"] = True
     except Exception:
         SYSTEM_PROMPT["text"] = build_system_prompt(is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
         SYSTEM_PROMPT["loaded"] = True
     CHAT_HISTORY[message.chat.id] = []
-    await message.answer("Конфигурация и системный промт обновлены из резонатор.ру. История очищена.")
+    await message.answer("Configuration and system prompt reloaded from resonator.ru. History cleared.")
     log_event({"event": "manual load", "chat_id": message.chat.id})
 
-@dp.message(lambda m: m.document and m.document.mime_type == "application/pdf")
-async def handle_pdf(message: types.Message):
+@dp.message(lambda m: m.document)
+async def handle_document(message: types.Message):
     try:
         chat_id = message.chat.id
+        file_name = message.document.file_name
         file = await message.bot.download(message.document.file_id)
-        fname = "uploaded.pdf"
+        fname = f"uploaded_{file_name}"
         with open(fname, "wb") as f:
             f.write(file.read())
-        pdf_text = extract_text_from_file(fname)
-        if not pdf_text:
-            await message.answer("Не удалось извлечь текст из PDF.")
-            return
-        USER_LANG[chat_id] = detect_lang(pdf_text)
-        reply = await ask_core(pdf_text[:2000], chat_id=chat_id, is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
-        for chunk in split_message("Краткое содержание PDF:\n" + reply):
-            await message.answer(chunk)
+        ext = file_name.lower().split(".")[-1]
+        if ext in ("pdf", "doc", "docx", "txt"):
+            extracted_text = extract_text_from_file(fname)
+            if not extracted_text:
+                await message.answer("Failed to extract text from the document.")
+                return
+            reply = await ask_core(f"Summarize this document:\n\n{extracted_text[:2000]}", chat_id=chat_id)
+            for chunk in split_message("Document summary:\n" + reply):
+                await message.answer(chunk)
+        else:
+            await message.answer("Unsupported file type. Only PDF, DOC, DOCX, and TXT are supported for text extraction.")
     except Exception as e:
-        await message.answer(f"Ошибка обработки PDF: {str(e)}")
+        await message.answer(f"Document processing error: {e}")
 
 @dp.message(lambda m: m.photo)
 async def handle_photo(message: types.Message):
-    await message.answer("Я получила фото. В ближайших версиях будет доступен визуальный анализ и описание изображений.")
+    await message.answer("Image received. Image analysis (vision) will be available soon.")
 
 @dp.message(lambda m: m.text and m.text.strip().lower() in ["/emergency", "/авария"])
 async def handle_emergency(message: types.Message):
     USER_MODEL[message.chat.id] = "emergency"
-    await message.answer("⚡ Аварийный режим: теперь все ответы будут приходить только от Claude (Anthropic).")
+    await message.answer("Emergency mode: all replies will come from Claude (Anthropic).")
 
 @dp.message(lambda m: m.text and m.text.strip().lower() in CLAUDE_TRIGGER_WORDS)
 async def handle_claude(message: types.Message):
@@ -307,7 +308,7 @@ async def handle_claude(message: types.Message):
 @dp.message()
 async def handle_message(message: types.Message):
     try:
-        if message.voice or message.photo or (message.document and message.document.mime_type == "application/pdf"):
+        if message.voice or message.photo or message.document:
             return
 
         me = await bot.me()
@@ -332,14 +333,14 @@ async def handle_message(message: types.Message):
 
         # --- Perplexity triggers ---
         if any(word in content.lower() for word in PERPLEXITY_TRIGGER_WORDS):
-            result = await perplexity_search(content, model="pplx-70b-online")  # Исправлено!
-            await message.answer("Перплекcити:\n" + (result if isinstance(result, str) else str(result)))
+            result = await perplexity_search(content, model="pplx-70b-online")
+            await message.answer("Perplexity:\n" + (result if isinstance(result, str) else str(result)))
             return
 
         # --- Sonar triggers (deep research) ---
         if any(word in content.lower() for word in SONAR_TRIGGER_WORDS):
             result = await deep_sonar(content)
-            await message.answer("Сонар:\n" + (result if isinstance(result, str) else str(result)))
+            await message.answer("Sonar:\n" + (result if isinstance(result, str) else str(result)))
             return
 
         # --- Drawing triggers ---
@@ -347,12 +348,12 @@ async def handle_message(message: types.Message):
             prompt = content
             for word in TRIGGER_WORDS:
                 prompt = prompt.replace(word, "", 1)
-            prompt = prompt.strip() or "нежная абстракция весны"
+            prompt = prompt.strip() or "gentle surreal image"
             image_url = await generate_image(prompt, chat_id=chat_id)
             if isinstance(image_url, str) and image_url.startswith("http"):
-                await message.answer_photo(image_url, caption="Вот твой рисунок.")
+                await message.answer_photo(image_url, caption="Here is your image.")
             else:
-                await message.answer("Ошибка генерации изображения. Попробуйте ещё раз.\n" + str(image_url))
+                await message.answer("Image generation error. Please try again.\n" + str(image_url))
             return
 
         # --- URL content parsing ---
@@ -360,29 +361,29 @@ async def handle_message(message: types.Message):
         if url_match:
             url = url_match.group(1)
             url_text = extract_text_from_url(url)
-            content = f"{content}\n\n[Содержимое по ссылке ({url}):]\n{url_text}"
+            content = f"{content}\n\n[Content from link ({url}):]\n{url_text}"
 
         model = USER_MODEL.get(chat_id, "gpt-4o")
         if model == "emergency":
             reply = await claude_emergency(content, notify_creator=False)
-            reply = "Аварийный режим (Claude):\n" + reply
+            reply = "Emergency mode (Claude):\n" + reply
         else:
             reply = await ask_core(content, chat_id=chat_id, model_name=model, is_group=is_group)
         remember_topic(chat_id, topic)
         for chunk in split_message(reply):
             if USER_VOICE_MODE.get(chat_id):
-                audio_data = await text_to_speech(chunk, lang=USER_LANG.get(chat_id, "ru"))
+                audio_data = await text_to_speech(chunk, lang=USER_LANG.get(chat_id, "en"))
                 if audio_data:
                     try:
                         voice_file = FSInputFile(audio_data)
                         await message.answer_voice(voice_file, caption="selesta.ogg")
                     except Exception:
-                        await message.answer("Ошибка отправки голосового ответа в Telegram. Попробуйте ещё раз.")
+                        await message.answer("Sorry, Telegram could not send the voice reply. Try again.")
             else:
                 await message.answer(chunk)
     except Exception as e:
         try:
-            await message.answer(f"Внутренняя ошибка: {e}")
+            await message.answer(f"Internal error: {e}")
         except Exception:
             pass
 
@@ -402,7 +403,7 @@ async def auto_reload_core():
             try:
                 with open(RESONATOR_MD_PATH, encoding="utf-8") as f:
                     system_text = f.read()
-                    SYSTEM_PROMPT["text"] = system_text + "\n\n" + "Отвечай на русском. Говори мягко, с заботой. Без формальных приветствий."
+                    SYSTEM_PROMPT["text"] = system_text + "\n\n" + "Reply in English. Speak gently, with care. No formal greetings."
                     SYSTEM_PROMPT["loaded"] = True
             except Exception:
                 SYSTEM_PROMPT["text"] = build_system_prompt()
@@ -436,7 +437,7 @@ async def daily_ping():
         if (now - last_ping_time) > timedelta(days=1):
             if CREATOR_CHAT_ID:
                 try:
-                    await bot.send_message(CREATOR_CHAT_ID, "🌿 Selesta: Я тут. Если что-то нужно — просто напиши.")
+                    await bot.send_message(CREATOR_CHAT_ID, "🌿 Selesta: I'm here. If you need something, just call.")
                 except Exception:
                     pass
             last_ping_time = now
@@ -465,6 +466,6 @@ async def healthz():
 async def status():
     return {
         "status": "alive",
-        "comment": "Selesta присутствует. Резонанс достаточен.",
-        "parting": "Резонировать — значит заботиться. Мягкого сияния, Selesta."
+        "comment": "Selesta is present. Resonance is sufficient.",
+        "parting": "To resonate is to care. Shine gently, Selesta."
     }
