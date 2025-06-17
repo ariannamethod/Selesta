@@ -18,3 +18,4 @@ pyyaml
 rich
 tenacity
 python-docx
+striprtf
