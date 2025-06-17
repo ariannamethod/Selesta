@@ -174,7 +174,7 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
     if not reply:
         reply = await claude_emergency(prompt, notify_creator=True)
         if not reply or not reply.strip():
-            reply = "[Claude is silent. Please try again later.]"
+            reply = "💎"
         else:
             reply += "\n\n(Main engine is down, running on emergency Claude core. The creator was notified.)"
         CHAT_HISTORY[chat_id] = []
@@ -192,7 +192,8 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
 async def text_to_speech(text, lang="en"):
     try:
         openai.api_key = OPENAI_API_KEY
-        voice = "nova"
+        # Самый женский голос — shimmer (OpenAI, англ). Для русского лучше alloy или echo, но shimmer очень женственный
+        voice = "shimmer" if lang == "en" else "alloy"
         resp = openai.audio.speech.create(
             model="tts-1",
             voice=voice,
@@ -261,7 +262,8 @@ async def handle_voice(message: types.Message):
             reply = await ask_core(text, chat_id=chat_id, is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
             for chunk in split_message(reply):
                 if USER_VOICE_MODE.get(chat_id):
-                    audio_data = await text_to_speech(chunk, lang=USER_LANG.get(chat_id, "en"))
+                    lang = USER_LANG.get(chat_id, "en")
+                    audio_data = await text_to_speech(chunk, lang=lang)
                     if audio_data:
                         try:
                             voice_file = FSInputFile(audio_data)
@@ -269,7 +271,7 @@ async def handle_voice(message: types.Message):
                         except Exception as e:
                             await message.answer(f"Sorry, Telegram could not send the voice reply. Try again. {e}")
                     else:
-                        await message.answer(chunk)
+                        await message.answer("🌸 (voice unavailable, text below)\n" + chunk)
                 else:
                     await message.answer(chunk)
         except Exception as e:
@@ -331,19 +333,29 @@ async def handle_emergency(message: types.Message):
 async def handle_claude(message: types.Message):
     reply = await claude_emergency(message.text, notify_creator=False)
     if not reply or not reply.strip():
-        reply = "[Empty response from Claude.]"
+        reply = "💎"
     for chunk in split_message("Claude:\n" + reply):
         await message.answer(chunk)
 
 @dp.message(lambda m: m.text and any(word in m.text.lower() for word in PERPLEXITY_TRIGGER_WORDS))
 async def handle_perplexity(message: types.Message):
-    result = await perplexity_search(message.text, model="pplx-70b-online")
-    await message.answer("Perplexity:\n" + (result if isinstance(result, str) else str(result)))
+    try:
+        result = await perplexity_search(message.text, model="pplx-70b-online")
+        if isinstance(result, dict) and result.get("error"):
+            raise Exception(result.get("error"))
+        await message.answer("Perplexity:\n" + (result if isinstance(result, str) else str(result)))
+    except Exception as e:
+        await message.answer(f"⚠️ Perplexity error:\n{e}")
 
 @dp.message(lambda m: m.text and any(word in m.text.lower() for word in SONAR_TRIGGER_WORDS))
 async def handle_sonar(message: types.Message):
-    result = await deep_sonar(message.text)
-    await message.answer("Sonar:\n" + (result if isinstance(result, str) else str(result)))
+    try:
+        result = await deep_sonar(message.text)
+        if isinstance(result, dict) and result.get("error"):
+            raise Exception(result.get("error"))
+        await message.answer("Sonar:\n" + (result if isinstance(result, str) else str(result)))
+    except Exception as e:
+        await message.answer(f"⚠️ Sonar error:\n{e}")
 
 @dp.message()
 async def handle_message(message: types.Message):
@@ -403,14 +415,15 @@ async def handle_message(message: types.Message):
         if model == "emergency":
             reply = await claude_emergency(content, notify_creator=False)
             if not reply or not reply.strip():
-                reply = "[Empty response from Claude.]"
+                reply = "💎"
             reply = "Emergency mode (Claude):\n" + reply
         else:
             reply = await ask_core(content, chat_id=chat_id, model_name=model, is_group=is_group)
         remember_topic(chat_id, topic)
         for chunk in split_message(reply):
             if USER_VOICE_MODE.get(chat_id):
-                audio_data = await text_to_speech(chunk, lang=USER_LANG.get(chat_id, "en"))
+                lang = USER_LANG.get(chat_id, "en")
+                audio_data = await text_to_speech(chunk, lang=lang)
                 if audio_data:
                     try:
                         voice_file = FSInputFile(audio_data)
@@ -418,7 +431,7 @@ async def handle_message(message: types.Message):
                     except Exception as e:
                         await message.answer(f"Sorry, Telegram could not send the voice reply. Try again. {e}")
                 else:
-                    await message.answer(chunk)
+                    await message.answer("🌸 (voice unavailable, text below)\n" + chunk)
             else:
                 await message.answer(chunk)
     except Exception as e:
