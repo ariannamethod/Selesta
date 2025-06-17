@@ -213,6 +213,11 @@ async def set_voiceoff(message: types.Message):
     USER_VOICE_MODE[message.chat.id] = False
     await message.answer("Voice replies are disabled. Text only.")
 
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/gpt")
+async def set_gpt(message: types.Message):
+    USER_MODEL[message.chat.id] = "gpt-4o"
+    await message.answer("The model is now set to GPT-4o for this chat. All new replies will use GPT.")
+
 @dp.message(lambda m: m.voice)
 async def handle_voice(message: types.Message):
     try:
