@@ -69,7 +69,6 @@ def remember_topic(chat_id, topic):
     LAST_ANSWER_TIME[chat_id] = datetime.now()
 
 def detect_lang(text):
-    # Default to English if no Cyrillic characters
     if any(c in text for c in "ёйцукенгшщзхъфывапролджэячсмитьбю"):
         return "ru"
     return "en"
@@ -79,7 +78,51 @@ TRIGGER_WORDS = [
 ]
 CLAUDE_TRIGGER_WORDS = ["/claude", "/клод", "клод,"]
 
-# --- LLM/AI CORE
+# --- Векторизация ---
+VECTORIZATION_LOCK = False
+VECTORIZATION_TASK = None
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/vector")
+async def handle_vector(message: types.Message):
+    global VECTORIZATION_LOCK, VECTORIZATION_TASK
+    if VECTORIZATION_LOCK:
+        await message.answer("Векторизация уже выполняется. Для остановки используйте /vectorstop.")
+        return
+    VECTORIZATION_LOCK = True
+    await message.answer("Starting vectorization of markdown files... Для остановки используйте /vectorstop.")
+    loop = asyncio.get_event_loop()
+    VECTORIZATION_TASK = loop.create_task(_vectorize_notify(message))
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/vectorstop")
+async def handle_vector_stop(message: types.Message):
+    global VECTORIZATION_LOCK, VECTORIZATION_TASK
+    if VECTORIZATION_LOCK and VECTORIZATION_TASK:
+        VECTORIZATION_TASK.cancel()
+        VECTORIZATION_LOCK = False
+        VECTORIZATION_TASK = None
+        await message.answer("Векторизация остановлена.")
+    else:
+        await message.answer("Векторизация сейчас не выполняется.")
+
+async def _vectorize_notify(message):
+    global VECTORIZATION_LOCK, VECTORIZATION_TASK
+    try:
+        async def notify(msg):
+            try:
+                await message.answer(str(msg))
+            except Exception:
+                pass
+        res = await vectorize_all_files(OPENAI_API_KEY, force=True, on_message=notify)
+        await message.answer(f"Vectorization complete.\nUpserted: {len(res['upserted'])}\nDeleted: {len(res['deleted'])}")
+    except asyncio.CancelledError:
+        await message.answer("Векторизация была отменена по запросу.")
+    except Exception as e:
+        await message.answer(f"Vectorization error: {e}")
+    finally:
+        VECTORIZATION_LOCK = False
+        VECTORIZATION_TASK = None
+
+# --- LLM/AI CORE ---
 async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
     import tiktoken
     add_opinion = "#opinions" in prompt
@@ -238,29 +281,6 @@ async def set_gpt(message: types.Message):
     USER_MODEL[message.chat.id] = "gpt-4o"
     await message.answer("The model is now set to GPT-4o for this chat. All new replies will use GPT.")
 
-# --- Векторизация делается в отдельной задаче, чтобы не блокировать event loop ---
-VECTORIZATION_LOCK = False
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/vector")
-async def handle_vector(message: types.Message):
-    global VECTORIZATION_LOCK
-    if VECTORIZATION_LOCK:
-        await message.answer("Векторизация уже выполняется. Подождите окончания.")
-        return
-    VECTORIZATION_LOCK = True
-    await message.answer("Starting vectorization of markdown files...")
-    asyncio.create_task(_vectorize_notify(message))
-
-async def _vectorize_notify(message):
-    global VECTORIZATION_LOCK
-    try:
-        res = await vectorize_all_files(OPENAI_API_KEY, force=True, on_message=lambda msg: message.answer(str(msg)))
-        await message.answer(f"Vectorization complete.\nUpserted: {len(res['upserted'])}\nDeleted: {len(res['deleted'])}")
-    except Exception as e:
-        await message.answer(f"Vectorization error: {e}")
-    finally:
-        VECTORIZATION_LOCK = False
-
 @dp.message(lambda m: m.text and m.text.strip().lower() == "/clear")
 async def handle_clear(message: types.Message):
     try:
@@ -387,7 +407,6 @@ async def handle_message(message: types.Message):
             log_event({"event": "skip_spam", "chat_id": chat_id, "topic": topic})
             return
 
-        # Always respond in groups if mentioned/tagged/quoted or direct, as in monday style
         mentioned = (
             not is_group or
             any(x in content.casefold() for x in [
@@ -398,7 +417,6 @@ async def handle_message(message: types.Message):
         if not mentioned:
             return
 
-        # --- Image triggers ---
         if any(word in content.lower() for word in TRIGGER_WORDS) or content.lower().startswith("/draw"):
             prompt = content
             for word in TRIGGER_WORDS:
@@ -411,7 +429,6 @@ async def handle_message(message: types.Message):
                 await message.answer("Image generation error. Please try again.\n" + str(image_url))
             return
 
-        # --- URL content parsing ---
         url_match = re.search(r'(https?://[^\s]+)', content)
         if url_match:
             url = url_match.group(1)
