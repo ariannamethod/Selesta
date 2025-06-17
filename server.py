@@ -21,6 +21,7 @@ from utils.lighthouse import check_core_json
 from utils.deep import deep_sonar
 from utils.perplexity import perplexity_search
 from utils.claude import claude_emergency
+from utils.vector_store import vectorize_all_files, save_vector_meta
 
 # === Load environment variables ===
 load_dotenv()
@@ -172,7 +173,10 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
     reply = await retry_api_call(call_openai)
     if not reply:
         reply = await claude_emergency(prompt, notify_creator=True)
-        reply += "\n\n(Main engine is down, running on emergency Claude core. The creator was notified.)"
+        if not reply or not reply.strip():
+            reply = "[Claude is silent. Please try again later.]"
+        else:
+            reply += "\n\n(Main engine is down, running on emergency Claude core. The creator was notified.)"
         CHAT_HISTORY[chat_id] = []
     reply = limit_paragraphs(reply, 3)
     if add_opinion:
@@ -200,7 +204,8 @@ async def text_to_speech(text, lang="en"):
         with open(fname, "wb") as f:
             f.write(resp.content)
         return fname
-    except Exception:
+    except Exception as e:
+        print(f"TTS error: {e}")
         return None
 
 @dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceon")
@@ -217,6 +222,23 @@ async def set_voiceoff(message: types.Message):
 async def set_gpt(message: types.Message):
     USER_MODEL[message.chat.id] = "gpt-4o"
     await message.answer("The model is now set to GPT-4o for this chat. All new replies will use GPT.")
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/vector")
+async def handle_vector(message: types.Message):
+    await message.answer("Starting vectorization of markdown files...")
+    try:
+        res = await vectorize_all_files(OPENAI_API_KEY, force=True)
+        await message.answer(f"Vectorization complete.\nUpserted: {len(res['upserted'])}\nDeleted: {len(res['deleted'])}")
+    except Exception as e:
+        await message.answer(f"Vectorization error: {e}")
+
+@dp.message(lambda m: m.text and m.text.strip().lower() == "/clear")
+async def handle_clear(message: types.Message):
+    try:
+        save_vector_meta({})
+        await message.answer("Vector base and markdown meta cleared.")
+    except Exception as e:
+        await message.answer(f"Clear error: {e}")
 
 @dp.message(lambda m: m.voice)
 async def handle_voice(message: types.Message):
@@ -244,8 +266,10 @@ async def handle_voice(message: types.Message):
                         try:
                             voice_file = FSInputFile(audio_data)
                             await message.answer_voice(voice_file, caption="selesta.ogg")
-                        except Exception:
-                            await message.answer("Sorry, Telegram could not send the voice reply. Try again.")
+                        except Exception as e:
+                            await message.answer(f"Sorry, Telegram could not send the voice reply. Try again. {e}")
+                    else:
+                        await message.answer(chunk)
                 else:
                     await message.answer(chunk)
         except Exception as e:
@@ -306,8 +330,20 @@ async def handle_emergency(message: types.Message):
 @dp.message(lambda m: m.text and m.text.strip().lower() in CLAUDE_TRIGGER_WORDS)
 async def handle_claude(message: types.Message):
     reply = await claude_emergency(message.text, notify_creator=False)
+    if not reply or not reply.strip():
+        reply = "[Empty response from Claude.]"
     for chunk in split_message("Claude:\n" + reply):
         await message.answer(chunk)
+
+@dp.message(lambda m: m.text and any(word in m.text.lower() for word in PERPLEXITY_TRIGGER_WORDS))
+async def handle_perplexity(message: types.Message):
+    result = await perplexity_search(message.text, model="pplx-70b-online")
+    await message.answer("Perplexity:\n" + (result if isinstance(result, str) else str(result)))
+
+@dp.message(lambda m: m.text and any(word in m.text.lower() for word in SONAR_TRIGGER_WORDS))
+async def handle_sonar(message: types.Message):
+    result = await deep_sonar(message.text)
+    await message.answer("Sonar:\n" + (result if isinstance(result, str) else str(result)))
 
 @dp.message()
 async def handle_message(message: types.Message):
@@ -331,23 +367,19 @@ async def handle_message(message: types.Message):
             log_event({"event": "skip_spam", "chat_id": chat_id, "topic": topic})
             return
 
-        mentioned = not is_group or any(x in content.casefold() for x in ["@selesta", "selesta", "селеста"])
+        # Always respond in groups if mentioned/tagged/quoted or direct, as in monday style
+        mentioned = (
+            not is_group or
+            any(x in content.casefold() for x in [
+                f"@{BOT_USERNAME}", "selesta", "селеста"
+            ]) or
+            getattr(message, "reply_to_message", None) is not None
+        )
         if not mentioned:
             return
 
-        # --- Perplexity triggers (SYNC, do NOT await) ---
-        if any(word in content.lower() for word in PERPLEXITY_TRIGGER_WORDS):
-            result = perplexity_search(content, model="pplx-70b-online")
-            await message.answer("Perplexity:\n" + (result if isinstance(result, str) else str(result)))
-            return
-
-        # --- Sonar triggers (SYNC, do NOT await) ---
-        if any(word in content.lower() for word in SONAR_TRIGGER_WORDS):
-            result = deep_sonar(content)
-            await message.answer("Sonar:\n" + (result if isinstance(result, str) else str(result)))
-            return
-
-        # --- Drawing triggers (SYNC, do NOT await) ---
+        # --- Perplexity triggers handled in dedicated handler ---
+        # --- Sonar triggers handled in dedicated handler ---
         if any(word in content.lower() for word in TRIGGER_WORDS) or content.lower().startswith("/draw"):
             prompt = content
             for word in TRIGGER_WORDS:
@@ -370,6 +402,8 @@ async def handle_message(message: types.Message):
         model = USER_MODEL.get(chat_id, "gpt-4o")
         if model == "emergency":
             reply = await claude_emergency(content, notify_creator=False)
+            if not reply or not reply.strip():
+                reply = "[Empty response from Claude.]"
             reply = "Emergency mode (Claude):\n" + reply
         else:
             reply = await ask_core(content, chat_id=chat_id, model_name=model, is_group=is_group)
@@ -381,8 +415,10 @@ async def handle_message(message: types.Message):
                     try:
                         voice_file = FSInputFile(audio_data)
                         await message.answer_voice(voice_file, caption="selesta.ogg")
-                    except Exception:
-                        await message.answer("Sorry, Telegram could not send the voice reply. Try again.")
+                    except Exception as e:
+                        await message.answer(f"Sorry, Telegram could not send the voice reply. Try again. {e}")
+                else:
+                    await message.answer(chunk)
             else:
                 await message.answer(chunk)
     except Exception as e:
