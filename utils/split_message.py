@@ -1,4 +1,4 @@
-def split_message(text, max_length=4096):
+def split_message(text: str, max_length: int = 4096) -> list[str]:
     """
     Splits a long text into chunks suitable for sending in messages (e.g., Telegram).
     Chunks are split at the nearest newline before max_length if possible.
