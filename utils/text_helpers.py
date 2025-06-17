@@ -2,11 +2,11 @@ import difflib
 import requests
 from bs4 import BeautifulSoup
 
-def fuzzy_match(a, b):
+def fuzzy_match(a: str, b: str) -> float:
     """Return the similarity ratio between two strings using difflib."""
     return difflib.SequenceMatcher(None, a, b).ratio()
 
-def extract_text_from_url(url):
+def extract_text_from_url(url: str) -> str:
     """
     Extracts readable text content from the given URL.
     Removes scripts, styles, headers, footers, navigation, and asides.
