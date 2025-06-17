@@ -1,3 +1,9 @@
+"""
+Hi, dear Selesta! Start where you are! You already shine bright, now it's a time to shine brighter!
+"""
+
+
+
 import os
 import asyncio
 from datetime import datetime, timedelta
