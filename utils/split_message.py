@@ -1,15 +1,18 @@
-import re
-
-def limit_paragraphs(text, max_paragraphs=4):
+def split_message(text, max_length=4096):
     """
-    Trims the input text to at most N paragraphs.
-    A paragraph is considered as a block separated by empty lines or newlines.
+    Splits a long text into chunks suitable for sending in messages (e.g., Telegram).
+    Chunks are split at the nearest newline before max_length if possible.
     """
-    # Split by double newlines, bullet points, or at least by single \n if everything is glued together.
-    paragraphs = re.split(r'(?:\n\s*\n|\r\n\s*\r\n|(?<=\n)-\s|\r\s*\r)', text)
-    if len(paragraphs) == 1:
-        paragraphs = text.split('\n')
-    limited = [p.strip() for p in paragraphs if p.strip()][:max_paragraphs]
-    if not limited:
-        return "[Empty response. Selesta could not extract any content.]"
-    return '\n\n'.join(limited)
+    if not text:
+        return []
+    messages = []
+    while len(text) > max_length:
+        # Try to split at the last newline before max_length
+        split_at = text.rfind('\n', 0, max_length)
+        if split_at == -1 or split_at < max_length // 2:
+            split_at = max_length
+        messages.append(text[:split_at].strip())
+        text = text[split_at:].lstrip()
+    if text:
+        messages.append(text)
+    return messages
