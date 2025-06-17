@@ -236,8 +236,7 @@ async def text_to_speech(text, lang="en"):
                 model="tts-1",
                 voice=voice,
                 input=text,
-                response_format="ogg_opus",
-                language=lang
+                response_format="ogg_opus"
             )
         except Exception as e:
             # Если shimmer не сработал — fallback на alloy
@@ -246,8 +245,7 @@ async def text_to_speech(text, lang="en"):
                     model="tts-1",
                     voice="alloy",
                     input=text,
-                    response_format="ogg_opus",
-                    language=lang
+                    response_format="ogg_opus"
                 )
             else:
                 # Для русского если alloy не сработал — fallback на nova
@@ -255,8 +253,7 @@ async def text_to_speech(text, lang="en"):
                     model="tts-1",
                     voice="nova",
                     input=text,
-                    response_format="ogg_opus",
-                    language=lang
+                    response_format="ogg_opus"
                 )
         fname = "tts_output.ogg"
         with open(fname, "wb") as f:
