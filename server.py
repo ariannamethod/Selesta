@@ -192,15 +192,40 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
 async def text_to_speech(text, lang="en"):
     try:
         openai.api_key = OPENAI_API_KEY
-        # Самый женский голос — shimmer (OpenAI, англ). Для русского лучше alloy или echo, но shimmer очень женственный
-        voice = "shimmer" if lang == "en" else "alloy"
-        resp = openai.audio.speech.create(
-            model="tts-1",
-            voice=voice,
-            input=text,
-            response_format="ogg_opus",
-            language=lang
-        )
+        # Выбор женского голоса для английского и русского, fallback — alloy (женский, звучит и на русском и на английском)
+        # shimmer — только EN, alloy — универсальный, nova — женский, echo — мужской
+        # Для русского alloy или nova, для английского shimmer, alloy, nova (но shimmer не говорит по-русски)
+        if lang == "ru":
+            voice = "alloy"  # alloy и nova — оба женские, alloy чуть теплее
+        else:
+            voice = "shimmer"  # shimmer — самый женский для EN
+        try:
+            resp = openai.audio.speech.create(
+                model="tts-1",
+                voice=voice,
+                input=text,
+                response_format="ogg_opus",
+                language=lang
+            )
+        except Exception as e:
+            # Если shimmer не сработал — fallback на alloy
+            if lang != "ru":
+                resp = openai.audio.speech.create(
+                    model="tts-1",
+                    voice="alloy",
+                    input=text,
+                    response_format="ogg_opus",
+                    language=lang
+                )
+            else:
+                # Для русского если alloy не сработал — fallback на nova
+                resp = openai.audio.speech.create(
+                    model="tts-1",
+                    voice="nova",
+                    input=text,
+                    response_format="ogg_opus",
+                    language=lang
+                )
         fname = "tts_output.ogg"
         with open(fname, "wb") as f:
             f.write(resp.content)
