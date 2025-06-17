@@ -77,6 +77,7 @@ async def vectorize_all_files(
     """
     Vectorizes all files in the config directory.
     Updates Pinecone index for new/changed files, deletes for removed files.
+    Runs in batch and is meant to be called from an async context.
     """
     current = scan_files()
     previous = load_vector_meta()
@@ -103,6 +104,8 @@ async def vectorize_all_files(
                     }
                 ])
                 upserted_ids.append(meta_id)
+                if on_message:
+                    await on_message(f"Upserted {meta_id}")
             except PineconeException as e:
                 if on_message:
                     await on_message(f"Pinecone error: {e}")
@@ -115,6 +118,8 @@ async def vectorize_all_files(
             try:
                 vector_index.delete(ids=[meta_id])
                 deleted_ids.append(meta_id)
+                if on_message:
+                    await on_message(f"Deleted {meta_id}")
             except Exception:
                 pass
 
