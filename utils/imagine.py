@@ -1,7 +1,12 @@
-import openai
 import os
+import openai
 
-def generate_image(prompt, chat_id=None, model="dall-e-3", size="1024x1024"):
+def generate_image(
+    prompt: str,
+    chat_id: int = None,
+    model: str = "dall-e-3",
+    size: str = "1024x1024"
+) -> str:
     """
     Generates an image using OpenAI DALL-E (3 or 2) and returns the image URL.
     Falls back to DALL-E 2 if DALL-E 3 is not available.
@@ -15,7 +20,7 @@ def generate_image(prompt, chat_id=None, model="dall-e-3", size="1024x1024"):
             n=1,
             size=size
         )
-        # Support both OpenAI v1 and v2 response structures
+        # Handle both OpenAI v1 and v2 response structures
         if hasattr(response, "data") and response.data and hasattr(response.data[0], "url"):
             return response.data[0].url
         elif isinstance(response, dict) and "data" in response and response["data"]:
