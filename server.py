@@ -238,14 +238,28 @@ async def set_gpt(message: types.Message):
     USER_MODEL[message.chat.id] = "gpt-4o"
     await message.answer("The model is now set to GPT-4o for this chat. All new replies will use GPT.")
 
+# --- Векторизация делается в отдельной задаче, чтобы не блокировать event loop ---
+VECTORIZATION_LOCK = False
+
 @dp.message(lambda m: m.text and m.text.strip().lower() == "/vector")
 async def handle_vector(message: types.Message):
+    global VECTORIZATION_LOCK
+    if VECTORIZATION_LOCK:
+        await message.answer("Векторизация уже выполняется. Подождите окончания.")
+        return
+    VECTORIZATION_LOCK = True
     await message.answer("Starting vectorization of markdown files...")
+    asyncio.create_task(_vectorize_notify(message))
+
+async def _vectorize_notify(message):
+    global VECTORIZATION_LOCK
     try:
-        res = await vectorize_all_files(OPENAI_API_KEY, force=True)
+        res = await vectorize_all_files(OPENAI_API_KEY, force=True, on_message=lambda msg: message.answer(str(msg)))
         await message.answer(f"Vectorization complete.\nUpserted: {len(res['upserted'])}\nDeleted: {len(res['deleted'])}")
     except Exception as e:
         await message.answer(f"Vectorization error: {e}")
+    finally:
+        VECTORIZATION_LOCK = False
 
 @dp.message(lambda m: m.text and m.text.strip().lower() == "/clear")
 async def handle_clear(message: types.Message):
