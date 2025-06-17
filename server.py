@@ -340,20 +340,28 @@ async def handle_claude(message: types.Message):
 @dp.message(lambda m: m.text and any(word in m.text.lower() for word in PERPLEXITY_TRIGGER_WORDS))
 async def handle_perplexity(message: types.Message):
     try:
+        # Используем только "pplx-70b-online" (или "pplx-70b-chat" если нужен чат)
         result = await perplexity_search(message.text, model="pplx-70b-online")
-        if isinstance(result, dict) and result.get("error"):
-            raise Exception(result.get("error"))
-        await message.answer("Perplexity:\n" + (result if isinstance(result, str) else str(result)))
+        if isinstance(result, dict):
+            answer = result.get("answer", "")
+            sources = result.get("sources", [])
+            if sources:
+                links = "\n".join([f"{i+1}. {s.get('title','')}: {s.get('url','')}" for i, s in enumerate(sources)])
+                msg = f"Perplexity:\n{answer}\n\nSources:\n{links}"
+            else:
+                msg = f"Perplexity:\n{answer or '[no answer]'}"
+            await message.answer(msg.strip())
+        else:
+            await message.answer(f"⚠️ Perplexity error:\n{result}")
     except Exception as e:
         await message.answer(f"⚠️ Perplexity error:\n{e}")
 
 @dp.message(lambda m: m.text and any(word in m.text.lower() for word in SONAR_TRIGGER_WORDS))
 async def handle_sonar(message: types.Message):
     try:
-        result = await deep_sonar(message.text)
-        if isinstance(result, dict) and result.get("error"):
-            raise Exception(result.get("error"))
-        await message.answer("Sonar:\n" + (result if isinstance(result, str) else str(result)))
+        # Используем только "sonar-medium-chat" (large часто 400)
+        result = await deep_sonar(message.text, model="sonar-medium-chat")
+        await message.answer(f"Sonar:\n{result}")
     except Exception as e:
         await message.answer(f"⚠️ Sonar error:\n{e}")
 
