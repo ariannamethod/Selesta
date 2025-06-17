@@ -149,6 +149,7 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
     history = CHAT_HISTORY.get(chat_id, [])
 
     def count_tokens(messages, model):
+        import tiktoken
         enc = tiktoken.get_encoding("cl100k_base")
         num_tokens = 0
         for m in messages:
@@ -226,7 +227,6 @@ async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
 async def text_to_speech(text, lang="en"):
     try:
         openai.api_key = OPENAI_API_KEY
-        # Женский голос для русского и английского
         if lang == "ru":
             voice = "alloy"
         else:
@@ -236,10 +236,9 @@ async def text_to_speech(text, lang="en"):
                 model="tts-1",
                 voice=voice,
                 input=text,
-                response_format="opus"  # <-- use 'opus' instead of 'ogg_opus'
+                response_format="opus"
             )
         except Exception as e:
-            # Если shimmer не сработал — fallback на alloy
             if lang != "ru":
                 resp = openai.audio.speech.create(
                     model="tts-1",
@@ -248,7 +247,6 @@ async def text_to_speech(text, lang="en"):
                     response_format="opus"
                 )
             else:
-                # Для русского если alloy не сработал — fallback на nova
                 resp = openai.audio.speech.create(
                     model="tts-1",
                     voice="nova",
@@ -404,12 +402,14 @@ async def handle_message(message: types.Message):
             log_event({"event": "skip_spam", "chat_id": chat_id, "topic": topic})
             return
 
+        # --- FIX: Only reply in groups if mentioned/tagged/quoted, or has #opinions, or trigger word ---
         mentioned = (
             not is_group or
             any(x in content.casefold() for x in [
                 f"@{BOT_USERNAME}", "selesta", "селеста"
             ]) or
-            getattr(message, "reply_to_message", None) is not None
+            getattr(message, "reply_to_message", None) is not None or
+            "#opinions" in content.casefold()
         )
         if not mentioned:
             return
