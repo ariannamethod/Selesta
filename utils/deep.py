@@ -1,23 +1,30 @@
 import os
-import requests
+import httpx
+from typing import Optional
 
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 
-# Use current valid Sonar models from Perplexity docs (as of 2025)
+# Current valid Sonar models (2025)
 SONAR_MODELS = {
     "small_chat": "sonar-small-chat",
     "medium_chat": "sonar-medium-chat",
     "large_chat": "sonar-large-chat",
-    # Add online if it returns to docs, or use chat models only
+    # If Perplexity adds more, extend here.
 }
 
-# Default to the most capable model available
 DEFAULT_SONAR_MODEL = SONAR_MODELS.get("large_chat", "sonar-medium-chat")
 
-def deep_sonar(prompt, model=DEFAULT_SONAR_MODEL, system_prompt=None, max_tokens=1000, temperature=0.7, top_p=0.9):
+async def deep_sonar(
+    prompt: str,
+    model: str = DEFAULT_SONAR_MODEL,
+    system_prompt: Optional[str] = None,
+    max_tokens: int = 1000,
+    temperature: float = 0.7,
+    top_p: float = 0.9
+) -> str:
     """
-    Sends a prompt to a Sonar model via Perplexity API.
-    Default model: sonar-large-chat.
+    Sends a prompt to a Perplexity Sonar model via their async API.
+    Returns the model's response text, or a formatted error.
     """
     if not PERPLEXITY_API_KEY:
         return "[Perplexity API key not set.]"
@@ -43,16 +50,17 @@ def deep_sonar(prompt, model=DEFAULT_SONAR_MODEL, system_prompt=None, max_tokens
         "top_p": top_p
     }
     try:
-        r = requests.post(url, headers=headers, json=data, timeout=60)
-        r.raise_for_status()
-        response = r.json()
-        return response.get("choices", [{}])[0].get("message", {}).get("content", "[Empty response from Sonar.]")
-    except requests.HTTPError as e:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(url, headers=headers, json=data)
+            response.raise_for_status()
+            resp_json = response.json()
+            return resp_json.get("choices", [{}])[0].get("message", {}).get("content", "[Empty response from Sonar.]")
+    except httpx.HTTPStatusError as e:
         try:
-            err_json = r.json()
+            err_json = e.response.json()
             err_message = err_json.get("error", {}).get("message", "")
-            return f"\nSonar API Error:\nStatus: {r.status_code}\nMessage: {err_message}\n"
+            return f"\nSonar API Error:\nStatus: {e.response.status_code}\nMessage: {err_message}\n"
         except Exception:
-            return f"\nSonar API Error:\nStatus: {r.status_code}\nBody: {r.text}\n"
+            return f"\nSonar API Error:\nStatus: {e.response.status_code}\nBody: {e.response.text}\n"
     except Exception as e:
         return f"[Sonar API error: {e}]"
