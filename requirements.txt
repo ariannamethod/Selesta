@@ -17,3 +17,4 @@ pydub
 pyyaml
 rich
 tenacity
+python-docx
