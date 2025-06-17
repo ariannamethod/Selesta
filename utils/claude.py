@@ -22,7 +22,7 @@ def _strip_claude_intro(text: str) -> str:
 async def claude_emergency(prompt, notify_creator=None, model="claude-3-opus-20240229", max_tokens=1024):
     """
     Emergency fallback to Claude. Notifies Oleg if main engine fails.
-    If Claude returns a standard greeting or is empty, this reply is stripped or replaced by a gentle silence.
+    If Claude returns a standard greeting or is empty, this reply is stripped or replaced by a gentle silence (💎).
     """
     url = "https://api.anthropic.com/v1/messages"
     headers = {
@@ -55,9 +55,9 @@ async def claude_emergency(prompt, notify_creator=None, model="claude-3-opus-202
                 "I'm sorry, but I can't help with that.",
                 "I'm sorry, but I must remain silent on this topic."
             }:
-                text = ""
+                text = "💎"
             if notify_creator:
                 print(f"Oleg, main engine failed. Claude fallback active. Notified at {CREATOR_CHAT_ID}.")
             return text.strip()
     except Exception as e:
-        return ""
+        return "💎"
