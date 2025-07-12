@@ -147,7 +147,8 @@ def load_config() -> Dict[str, Any]:
             # Создаем конфигурационный файл с настройками по умолчанию
             os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(default_config, indent=2, ensure_ascii=False, f)
+                # ИСПРАВЛЕНО: правильный порядок аргументов
+                json.dump(default_config, f, indent=2, ensure_ascii=False)
             return default_config
     except Exception as e:
         print(f"Error loading resonator config: {e}")
@@ -319,7 +320,8 @@ def update_config(new_config: Dict[str, Any]) -> bool:
         # Сохраняем обновленную конфигурацию
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(current_config, indent=2, ensure_ascii=False, f)
+            # ИСПРАВЛЕНО: правильный порядок аргументов
+            json.dump(current_config, f, indent=2, ensure_ascii=False)
         
         return True
     except Exception as e:
