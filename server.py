@@ -403,8 +403,7 @@ async def check_wilderness(background_tasks: BackgroundTasks) -> None:
         await wilderness_excursion()
         last_wilderness = current_time
     
-    # Запланировать следующую проверку конфигурации
-    background_tasks.add_task(auto_reload_core, background_tasks)
+    # Wilderness completed, further checks will be triggered by other requests
 
 # Роуты
 @app.on_event("startup")
