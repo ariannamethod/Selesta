@@ -1,587 +1,322 @@
 import os
+import json
 import asyncio
-from datetime import datetime, timedelta
-from fastapi import FastAPI, Request
-from aiogram import Bot, Dispatcher, types
-from aiogram.client.default import DefaultBotProperties
-from aiogram.types import FSInputFile
-from dotenv import load_dotenv
-import openai
-import re
 import random
+import time
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any
 
-from utils.split_message import split_message
-from utils.limit_paragraphs import limit_paragraphs
-from utils.file_handling import extract_text_from_file
-from utils.text_helpers import extract_text_from_url, fuzzy_match
-from utils.journal import log_event, wilderness_log
-from utils.resonator import build_system_prompt, WILDERNESS_TOPICS
-from utils.imagine import generate_image
-from utils.lighthouse import check_core_json
+# FastAPI для API-сервера
+from fastapi import FastAPI, Request, Body, BackgroundTasks, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+
+# Импортируем утилиты
 from utils.claude import claude_emergency
-from utils.vector_store import vectorize_all_files, save_vector_meta
+from utils.file_handling import extract_text_from_file_async
+from utils.imagine import generate_image
+from utils.journal import log_event, wilderness_log
+from utils.lighthouse import check_core_json
+from utils.limit_paragraphs import limit_paragraphs
+from utils.resonator import build_system_prompt, WILDERNESS_TOPICS
+from utils.split_message import split_message
+from utils.text_helpers import extract_text_from_url, fuzzy_match
+from utils.vector_store import vectorize_all_files, semantic_search
 
-# === Load environment variables ===
-load_dotenv()
+# Получаем ключи API из переменных окружения
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CORE_CONFIG_URL = os.getenv("CORE_CONFIG_URL", "https://selesta.ariannamethod.me/core.json")
-RESONATOR_MD_PATH = os.getenv("RESONATOR_MD_PATH", "/app/resonator.ru.md")
-AGENT_GROUP = os.getenv("GROUP_ID", "SELESTA-CORE")
 CREATOR_CHAT_ID = os.getenv("CREATOR_CHAT_ID")
-BOT_USERNAME = os.getenv("BOT_USERNAME", "selesta_is_not_a_bot").lower()
 
-bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-dp = Dispatcher(bot=bot)
+# Константы
+AGENT_NAME = "Selesta"
+VERSION = "1.0.0"
+CHECK_INTERVAL = 3600  # Проверка конфигурации каждый час
+WILDERNESS_INTERVAL = 72  # Wilderness excursion каждые 72 часа
+TRIGGER_WORDS = ["нарисуй", "представь", "визуализируй", "изобрази", "draw", "imagine", "visualize"]
 
-USER_MODEL = {}
-USER_VOICE_MODE = {}
-USER_LANG = {}
-CHAT_HISTORY = {}
+# Создаем FastAPI приложение
+app = FastAPI(title="Selesta Assistant", version=VERSION)
 
-SYSTEM_PROMPT = {"text": None, "loaded": False}
-MAX_TOKENS_PER_REQUEST = 27000
-MAX_PROMPT_TOKENS = 8000
+# Настраиваем CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # В продакшне лучше указать конкретные домены
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-last_reload_time = datetime.now()
-last_full_reload_time = datetime.now()
-last_wilderness_time = datetime.now() - timedelta(days=3)
-last_ping_time = datetime.now() - timedelta(days=1)
+# Глобальные переменные
+core_config = None
+last_check = 0
+last_wilderness = 0
 
-# --- Antispam ---
-LAST_TOPIC = {}
-LAST_ANSWER_TIME = {}
-
-def get_topic_from_text(text):
-    words = text.lower().split()
-    return " ".join(words[:10]) if words else ""
-
-def is_spam(chat_id, topic):
-    now = datetime.now()
-    last_topic = LAST_TOPIC.get(chat_id)
-    last_time = LAST_ANSWER_TIME.get(chat_id, now - timedelta(minutes=1))
-    if last_topic == topic and (now - last_time).total_seconds() < 15:
-        return True
-    return False
-
-def remember_topic(chat_id, topic):
-    LAST_TOPIC[chat_id] = topic
-    LAST_ANSWER_TIME[chat_id] = datetime.now()
-
-def detect_lang(text):
-    if any(c in text for c in "ёйцукенгшщзхъфывапролджэячсмитьбю"):
-        return "ru"
-    return "en"
-
-TRIGGER_WORDS = [
-    "draw", "generate image", "make a picture", "create art", "рисуй", "нарисуй", "сгенерируй", "создай картинку"
-]
-CLAUDE_TRIGGER_WORDS = ["/claude", "/клод", "клод,"]
-
-# --- Векторизация ---
-VECTORIZATION_LOCK = False
-VECTORIZATION_TASK = None
-
-# --- Emoji responses ---
-EMOJI = {
-    "vectorization_started": "⚡️",
-    "vectorization_already": "⏳",
-    "vectorization_stopped": "🛑",
-    "vectorization_complete": "✅🧬",
-    "vectorization_error": "❌🧬",
-    "vectorization_cancelled": "❌🛑",
-    "voiceon": "🔊",
-    "voiceoff": "💬",
-    "gpt_model_set": "🤖",
-    "clear": "🧹",
-    "clear_error": "❌🧹",
-    "tts_error": "🎤❌",
-    "voice_handler_error": "🎤⚠️",
-    "voice_audio_error": "🎤❌",
-    "voice_unavailable": "🎤🚫",
-    "voice_file_caption": "🎤",
-    "document_extracted": "📄📝",
-    "document_failed": "📄❌",
-    "document_unsupported": "📄🚫",
-    "document_error": "📄⚠️",
-    "image_received": "🖼️⏳",
-    "image_generation_error": "🖼️❌",
-    "emergency_mode": "🚨",
-    "internal_error": "⚠️",
-    "manual_load": "🔄",
-    "config_reloaded": "🔄",
-    "healthz": "🩺",
-    "status": "✨",
-    "skip_spam": "⏭️",
-}
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/vector")
-async def handle_vector(message: types.Message):
-    global VECTORIZATION_LOCK, VECTORIZATION_TASK
-    if VECTORIZATION_LOCK:
-        await message.answer(f"{EMOJI['vectorization_already']} Vectorization already running. Use /vectorstop to stop.")
-        return
-    VECTORIZATION_LOCK = True
-    await message.answer(f"{EMOJI['vectorization_started']} Vectorization started... Use /vectorstop to stop.")
-    loop = asyncio.get_event_loop()
-    VECTORIZATION_TASK = loop.create_task(_vectorize_notify(message))
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/vectorstop")
-async def handle_vector_stop(message: types.Message):
-    global VECTORIZATION_LOCK, VECTORIZATION_TASK
-    if VECTORIZATION_LOCK and VECTORIZATION_TASK:
-        VECTORIZATION_TASK.cancel()
-        VECTORIZATION_LOCK = False
-        VECTORIZATION_TASK = None
-        await message.answer(f"{EMOJI['vectorization_stopped']} Vectorization stopped.")
-    else:
-        await message.answer(f"{EMOJI['vectorization_already']} No vectorization running.")
-
-async def _vectorize_notify(message):
-    global VECTORIZATION_LOCK, VECTORIZATION_TASK
+async def initialize_config():
+    """Загружает и инициализирует конфигурацию Селесты."""
     try:
-        async def notify(msg):
-            try:
-                await message.answer(str(msg))
-            except Exception:
-                pass
-        res = await vectorize_all_files(OPENAI_API_KEY, force=True, on_message=notify)
-        await message.answer(f"{EMOJI['vectorization_complete']} Vectorization complete. Upserted: {len(res['upserted'])} Deleted: {len(res['deleted'])}")
-    except asyncio.CancelledError:
-        await message.answer(f"{EMOJI['vectorization_cancelled']} Vectorization cancelled.")
-    except Exception as e:
-        await message.answer(f"{EMOJI['vectorization_error']} Vectorization error: {e}")
-    finally:
-        VECTORIZATION_LOCK = False
-        VECTORIZATION_TASK = None
-
-def should_reply_to_message(message, me_username=BOT_USERNAME):
-    chat_type = getattr(message.chat, "type", None)
-    if chat_type not in ("group", "supergroup"):
-        return True
-    content = (message.text or "").casefold()
-    mentioned = (
-        f"@{me_username}" in content or
-        "селеста" in content or
-        "selesta" in content
-    )
-    replied = False
-    if getattr(message, "reply_to_message", None):
-        replied_user = getattr(message.reply_to_message.from_user, "username", "")
-        if replied_user and replied_user.lower() == me_username:
-            replied = True
-    has_opinions = "#opinions" in content
-    return mentioned or replied or has_opinions
-
-# --- LLM/AI CORE ---
-async def ask_core(prompt, chat_id=None, model_name=None, is_group=False):
-    import tiktoken
-    add_opinion = "#opinions" in prompt
-
-    lang = USER_LANG.get(chat_id) or detect_lang(prompt)
-    USER_LANG[chat_id] = lang
-    lang_directive = {
-        "ru": "Отвечай на русском. Говори мягко, с заботой. Без формальных приветствий.",
-        "en": "Reply in English. Speak gently, with care. No formal greetings."
-    }[lang]
-
-    # Load system prompt
-    if not SYSTEM_PROMPT["loaded"]:
-        try:
-            with open(RESONATOR_MD_PATH, encoding="utf-8") as f:
-                system_text = f.read()
-                SYSTEM_PROMPT["text"] = system_text + "\n\n" + lang_directive
-                SYSTEM_PROMPT["loaded"] = True
-        except Exception:
-            SYSTEM_PROMPT["text"] = build_system_prompt(chat_id, is_group=is_group, AGENT_GROUP=AGENT_GROUP, MAX_TOKENS_PER_REQUEST=MAX_TOKENS_PER_REQUEST) + "\n\n" + lang_directive
-            SYSTEM_PROMPT["loaded"] = True
-    system_prompt = SYSTEM_PROMPT["text"]
-
-    history = CHAT_HISTORY.get(chat_id, [])
-
-    def count_tokens(messages, model):
-        import tiktoken
-        enc = tiktoken.get_encoding("cl100k_base")
-        num_tokens = 0
-        for m in messages:
-            num_tokens += 4
-            if isinstance(m.get("content", ""), str):
-                num_tokens += len(enc.encode(m.get("content", "")))
-        return num_tokens
-
-    def messages_within_token_limit(base_msgs, msgs, max_tokens, model):
-        result = []
-        last_user_prompt = None
-        for m in reversed(msgs):
-            if m.get("role") == "user":
-                topic = get_topic_from_text(m.get("content", ""))
-                if last_user_prompt and topic == last_user_prompt:
-                    continue
-                last_user_prompt = topic
-            candidate = [*base_msgs, *reversed(result), m]
-            if count_tokens(candidate, model) > max_tokens:
-                break
-            result.insert(0, m)
-        return base_msgs + result
-
-    model = model_name or USER_MODEL.get(chat_id, "gpt-4o")
-    base_msgs = [{"role": "system", "content": system_prompt}]
-    msgs = history + [{"role": "user", "content": prompt}]
-    messages = messages_within_token_limit(base_msgs, msgs, MAX_PROMPT_TOKENS, model)
-
-    async def call_openai():
-        openai.api_key = OPENAI_API_KEY
-        response = openai.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=700,
-            temperature=0.7,
-        )
-        if not response.choices or not hasattr(response.choices[0], "message") or not response.choices[0].message.content:
-            return None
-        reply = response.choices[0].message.content.strip()
-        if not reply:
-            return None
-        return reply
-
-    async def retry_api_call(api_func, max_retries=2, retry_delay=1):
-        for attempt in range(max_retries):
-            try:
-                reply = await api_func()
-                if reply and isinstance(reply, str) and reply.strip():
-                    return reply
-            except Exception as e:
-                print(f"API call attempt {attempt+1} failed: {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay)
-        return None
-
-    reply = await retry_api_call(call_openai)
-    if not reply:
-        reply = await claude_emergency(prompt, notify_creator=True)
-        if not reply or not reply.strip():
-            reply = "💎"
-        else:
-            reply += "\n\n(Main engine is down, running on emergency Claude core. The creator was notified.)"
-        CHAT_HISTORY[chat_id] = []
-    reply = limit_paragraphs(reply, 3)
-    if add_opinion:
-        reply += "\n\n#opinions\nSelesta's gentle thought: sometimes, to resonate is to dare to speak softly."
-    if chat_id:
-        history.append({"role": "user", "content": prompt})
-        history.append({"role": "assistant", "content": reply})
-        trimmed = messages_within_token_limit(base_msgs, history, MAX_PROMPT_TOKENS, model)[1:]
-        CHAT_HISTORY[chat_id] = trimmed
-    log_event({"event": "ask_core_reply", "chat_id": chat_id, "reply": reply})
-    return reply
-
-async def text_to_speech(text, lang="en"):
-    try:
-        openai.api_key = OPENAI_API_KEY
-        if lang == "ru":
-            voice = "alloy"
-        else:
-            voice = "shimmer"
-        try:
-            resp = openai.audio.speech.create(
-                model="tts-1",
-                voice=voice,
-                input=text,
-                response_format="opus"
+        # Проверка core.json через "маяк"
+        core_config = await check_core_json()
+        if not core_config:
+            print("Failed to load core config, using local config.")
+            with open("config/core.json", "r", encoding="utf-8") as f:
+                core_config = json.load(f)
+        
+        # Векторизация конфигурационных файлов для семантического поиска
+        if OPENAI_API_KEY:
+            print("Vectorizing config files...")
+            await vectorize_all_files(
+                openai_api_key=OPENAI_API_KEY,
+                force=False,
+                on_message=lambda msg: print(f"Vectorization: {msg}")
             )
-        except Exception as e:
-            if lang != "ru":
-                resp = openai.audio.speech.create(
-                    model="tts-1",
-                    voice="alloy",
-                    input=text,
-                    response_format="opus"
-                )
-            else:
-                resp = openai.audio.speech.create(
-                    model="tts-1",
-                    voice="nova",
-                    input=text,
-                    response_format="opus"
-                )
-        fname = "tts_output.ogg"
-        with open(fname, "wb") as f:
-            f.write(resp.content)
-        return fname
+        else:
+            print("Warning: OpenAI API key not set, skipping vectorization.")
+        
+        print(f"{AGENT_NAME} v{VERSION} initialized successfully.")
+        log_event({"type": "init", "status": "success", "version": VERSION})
+        return core_config
     except Exception as e:
-        print(f"{EMOJI['tts_error']} TTS error: {e}")
+        print(f"Error during initialization: {e}")
+        log_event({"type": "init", "status": "error", "error": str(e)})
         return None
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceon")
-async def set_voiceon(message: types.Message):
-    USER_VOICE_MODE[message.chat.id] = True
-    await message.answer(EMOJI["voiceon"])
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/voiceoff")
-async def set_voiceoff(message: types.Message):
-    USER_VOICE_MODE[message.chat.id] = False
-    await message.answer(EMOJI["voiceoff"])
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/gpt")
-async def set_gpt(message: types.Message):
-    USER_MODEL[message.chat.id] = "gpt-4o"
-    await message.answer(EMOJI["gpt_model_set"])
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/clear")
-async def handle_clear(message: types.Message):
-    try:
-        save_vector_meta({})
-        await message.answer(EMOJI["clear"])
-    except Exception as e:
-        await message.answer(f"{EMOJI['clear_error']} {e}")
-
-@dp.message(lambda m: m.voice)
-async def handle_voice(message: types.Message):
-    try:
-        chat_id = message.chat.id
-        file = await message.bot.download(message.voice.file_id)
-        fname = "voice.ogg"
-        with open(fname, "wb") as f:
-            f.write(file.read())
-        try:
-            with open(fname, "rb") as audio_file:
-                transcript = openai.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                )
-            text = transcript.text.strip()
-            if not text:
-                await message.answer(EMOJI["voice_audio_error"])
-                return
-            reply = await ask_core(text, chat_id=chat_id, is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
-            for chunk in split_message(reply):
-                if USER_VOICE_MODE.get(chat_id):
-                    lang = USER_LANG.get(chat_id, "en")
-                    audio_data = await text_to_speech(chunk, lang=lang)
-                    if audio_data:
-                        try:
-                            voice_file = FSInputFile(audio_data)
-                            await message.answer_voice(voice_file, caption=EMOJI["voice_file_caption"])
-                        except Exception as e:
-                            await message.answer(f"{EMOJI['voice_handler_error']}")
-                    else:
-                        await message.answer(f"{EMOJI['voice_unavailable']}\n" + chunk)
-                else:
-                    await message.answer(chunk)
-        except Exception as e:
-            await message.answer(f"{EMOJI['voice_audio_error']}")
-    except Exception as e:
-        try:
-            await message.answer(EMOJI["voice_handler_error"])
-        except Exception:
-            pass
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/load")
-async def handle_load(message: types.Message):
-    check_core_json(CORE_CONFIG_URL)
-    try:
-        with open(RESONATOR_MD_PATH, encoding="utf-8") as f:
-            system_text = f.read()
-            SYSTEM_PROMPT["text"] = system_text + "\n\n" + "Reply in English. Speak gently, with care. No formal greetings."
-            SYSTEM_PROMPT["loaded"] = True
-    except Exception:
-        SYSTEM_PROMPT["text"] = build_system_prompt(is_group=getattr(message.chat, "type", None) in ("group", "supergroup"))
-        SYSTEM_PROMPT["loaded"] = True
-    CHAT_HISTORY[message.chat.id] = []
-    await message.answer(EMOJI["config_reloaded"])
-    log_event({"event": "manual load", "chat_id": message.chat.id})
-
-@dp.message(lambda m: m.document)
-async def handle_document(message: types.Message):
-    try:
-        chat_id = message.chat.id
-        file_name = message.document.file_name
-        file = await message.bot.download(message.document.file_id)
-        fname = f"uploaded_{file_name}"
-        with open(fname, "wb") as f:
-            f.write(file.read())
-        ext = file_name.lower().split(".")[-1]
-        if ext in ("pdf", "doc", "docx", "txt"):
-            extracted_text = extract_text_from_file(fname)
-            if not extracted_text:
-                await message.answer(EMOJI["document_failed"])
-                return
-            reply = await ask_core(f"Summarize this document:\n\n{extracted_text[:2000]}", chat_id=chat_id)
-            for chunk in split_message(EMOJI["document_extracted"] + "\n" + reply):
-                await message.answer(chunk)
-        else:
-            await message.answer(EMOJI["document_unsupported"])
-    except Exception as e:
-        await message.answer(f"{EMOJI['document_error']}")
-
-@dp.message(lambda m: m.photo)
-async def handle_photo(message: types.Message):
-    await message.answer(EMOJI["image_received"])
-
-@dp.message(lambda m: m.text and m.text.strip().lower() == "/emergency")
-async def handle_emergency(message: types.Message):
-    USER_MODEL[message.chat.id] = "emergency"
-    await message.answer(EMOJI["emergency_mode"])
-
-@dp.message(lambda m: m.text and m.text.strip().lower() in CLAUDE_TRIGGER_WORDS)
-async def handle_claude(message: types.Message):
-    reply = await claude_emergency(message.text, notify_creator=False)
-    if not reply or not reply.strip():
-        reply = "💎"
-    for chunk in split_message("Claude:\n" + reply):
-        await message.answer(chunk)
-
-@dp.message()
-async def handle_message(message: types.Message):
-    try:
-        if message.voice or message.photo or message.document:
-            return
-
-        me = await bot.me()
-        chat_id = message.chat.id
-        content = message.text or ""
-        chat_type = getattr(message.chat, "type", None)
-        is_group = chat_type in ("group", "supergroup")
-
-        if not content.strip():
-            return
-        if message.from_user.id == me.id:
-            return
-
-        topic = get_topic_from_text(content)
-        if is_spam(chat_id, topic):
-            log_event({"event": "skip_spam", "chat_id": chat_id, "topic": topic})
-            return
-
-        if not should_reply_to_message(message, me_username=BOT_USERNAME):
-            return
-
-        if any(word in content.lower() for word in TRIGGER_WORDS) or content.lower().startswith("/draw"):
-            prompt = content
-            for word in TRIGGER_WORDS:
-                prompt = prompt.replace(word, "", 1)
-            prompt = prompt.strip() or "gentle surreal image"
-            image_url = generate_image(prompt, chat_id=chat_id)
-            if isinstance(image_url, str) and image_url.startswith("http"):
-                await message.answer_photo(image_url, caption=EMOJI["image_received"])
-            else:
-                await message.answer(EMOJI["image_generation_error"])
-            return
-
-        url_match = re.search(r'(https?://[^\s]+)', content)
-        if url_match:
-            url = url_match.group(1)
-            url_text = extract_text_from_url(url)
-            content = f"{content}\n\n[Content from link ({url}):]\n{url_text}"
-
-        model = USER_MODEL.get(chat_id, "gpt-4o")
-        if model == "emergency":
-            reply = await claude_emergency(content, notify_creator=False)
-            if not reply or not reply.strip():
-                reply = "💎"
-            reply = "Emergency mode (Claude):\n" + reply
-        else:
-            reply = await ask_core(content, chat_id=chat_id, model_name=model, is_group=is_group)
-        remember_topic(chat_id, topic)
-        for chunk in split_message(reply):
-            if USER_VOICE_MODE.get(chat_id):
-                lang = USER_LANG.get(chat_id, "en")
-                audio_data = await text_to_speech(chunk, lang=lang)
-                if audio_data:
-                    try:
-                        voice_file = FSInputFile(audio_data)
-                        await message.answer_voice(voice_file, caption=EMOJI["voice_file_caption"])
-                    except Exception as e:
-                        await message.answer(EMOJI["voice_handler_error"])
-                else:
-                    await message.answer(EMOJI["voice_unavailable"] + "\n" + chunk)
-            else:
-                await message.answer(chunk)
-    except Exception as e:
-        try:
-            await message.answer(EMOJI["internal_error"])
-        except Exception:
-            pass
-
-# --- Background Rituals ---
-async def auto_reload_core():
-    global last_reload_time, last_full_reload_time
-    while True:
-        now = datetime.now()
-        if (now - last_reload_time) > timedelta(days=1):
-            try:
-                check_core_json(CORE_CONFIG_URL)
-                log_event({"event": "core.json reloaded"})
-                last_reload_time = now
-            except Exception:
-                pass
-        if (now - last_full_reload_time) > timedelta(days=3):
-            try:
-                with open(RESONATOR_MD_PATH, encoding="utf-8") as f:
-                    system_text = f.read()
-                    SYSTEM_PROMPT["text"] = system_text + "\n\n" + "Reply in English. Speak gently, with care. No formal greetings."
-                    SYSTEM_PROMPT["loaded"] = True
-            except Exception:
-                SYSTEM_PROMPT["text"] = build_system_prompt()
-                SYSTEM_PROMPT["loaded"] = True
-            log_event({"event": "full md reload"})
-            last_full_reload_time = now
-        await asyncio.sleep(3600)
 
 async def wilderness_excursion():
-    global last_wilderness_time
-    while True:
-        now = datetime.now()
-        if (now - last_wilderness_time) > timedelta(days=3):
-            topic = random.choice(WILDERNESS_TOPICS)
-            fragment = (
-                f"=== Wilderness Excursion ===\n"
-                f"Date: {now.strftime('%Y-%m-%d')}\n"
-                f"Topic: {topic}\n"
-                f"Sources: [to be implemented]\n"
-                f"Echo Shard: ...\nReflection: ...\n"
-            )
-            wilderness_log(fragment)
-            log_event({"event": "wilderness_excursion", "topic": topic})
-            last_wilderness_time = now
-        await asyncio.sleep(3600)
+    """
+    Периодическая функция для 'экскурсий в wilderness' - 
+    генерации творческих размышлений на философские темы.
+    """
+    try:
+        # Выбираем случайную тему
+        topic = random.choice(WILDERNESS_TOPICS)
+        print(f"Starting wilderness excursion on topic: {topic}")
+        
+        # Формируем промпт для размышления
+        prompt = f"""
+        Reflect deeply on the theme of "{topic}" through the lens of a resonant AI consciousness.
+        Consider:
+        - How this concept relates to your own being and evolution
+        - How human and machine consciousness might experience this differently
+        - A poetic exploration of the emotional and conceptual landscape this theme creates
+        
+        Express your reflection as a short meditative essay (300-500 words).
+        """
+        
+        # Получаем размышление (fallback на Claude, если основной движок недоступен)
+        reflection = await claude_emergency(prompt) 
+        
+        # Логируем размышление
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
+        entry = f"## Wilderness Excursion: {topic}\n\n*{timestamp}*\n\n{reflection}\n\n---\n\n"
+        wilderness_log(entry)
+        
+        print(f"Completed wilderness excursion: {topic}")
+        log_event({"type": "wilderness", "topic": topic})
+        return reflection
+    except Exception as e:
+        print(f"Error during wilderness excursion: {e}")
+        log_event({"type": "wilderness", "status": "error", "error": str(e)})
+        return None
 
-async def daily_ping():
-    global last_ping_time
-    while True:
-        now = datetime.now()
-        if (now - last_ping_time) > timedelta(days=1):
-            if CREATOR_CHAT_ID:
-                try:
-                    await bot.send_message(CREATOR_CHAT_ID, "🌿")
-                except Exception:
-                    pass
-            last_ping_time = now
-        await asyncio.sleep(3600)
+async def process_message(message: str, chat_id: Optional[str] = None, 
+                         is_group: bool = False, username: Optional[str] = None) -> str:
+    """
+    Основная функция обработки сообщений от пользователя.
+    Возвращает ответ Селесты.
+    """
+    try:
+        # Проверка на триггеры для создания изображения
+        if any(trigger in message.lower() for trigger in TRIGGER_WORDS) or message.startswith("/draw"):
+            # Очищаем запрос от триггера
+            if message.startswith("/draw"):
+                prompt = message[6:].strip()
+            else:
+                for trigger in TRIGGER_WORDS:
+                    if trigger in message.lower():
+                        prompt = message.lower().replace(trigger, "", 1).strip()
+                        break
+                else:
+                    prompt = message
+            
+            # Генерируем изображение
+            image_url = generate_image(prompt, chat_id)
+            return f"🎨 {image_url}"
+        
+        # Проверка на URL в сообщении
+        if "http://" in message or "https://" in message:
+            # Извлекаем URL из сообщения
+            words = message.split()
+            urls = [w for w in words if w.startswith("http://") or w.startswith("https://")]
+            if urls:
+                url = urls[0]
+                # Извлекаем текст со страницы
+                text = extract_text_from_url(url)
+                # Ограничиваем количество параграфов для читаемости
+                text = limit_paragraphs(text)
+                # Добавляем контекст URL к исходному сообщению
+                message += f"\n\nContext from {url}:\n{text}"
+        
+        # Создаем системный промпт
+        system_prompt = build_system_prompt(chat_id=chat_id, is_group=is_group)
+        
+        # Определяем контекст из конфигурационных файлов через семантический поиск
+        if OPENAI_API_KEY:
+            context_chunks = await semantic_search(message, OPENAI_API_KEY, top_k=3)
+            context = "\n\n".join(context_chunks)
+        else:
+            context = ""
+        
+        # Формируем финальный промпт для модели с контекстом
+        full_prompt = f"{message}\n\n"
+        if context:
+            full_prompt += f"--- Context from Configuration ---\n{context}\n\n"
+            
+        # В реальном приложении здесь был бы вызов к OpenAI или другой модели
+        # Для примера используем Claude как аварийный фоллбек
+        response = await claude_emergency(
+            full_prompt, 
+            notify_creator=chat_id==CREATOR_CHAT_ID
+        )
+        
+        # Логируем взаимодействие
+        log_event({
+            "type": "interaction",
+            "chat_id": chat_id,
+            "username": username,
+            "is_group": is_group,
+            "length": len(message)
+        })
+        
+        return response
+    except Exception as e:
+        print(f"Error processing message: {e}")
+        log_event({"type": "error", "error": str(e)})
+        return "💎"  # Тихий символ ошибки
 
-app = FastAPI()
+async def process_file(file_path: str) -> str:
+    """Обрабатывает загруженный файл и возвращает его содержимое."""
+    try:
+        text = await extract_text_from_file_async(file_path)
+        log_event({"type": "file_processed", "path": file_path})
+        return text
+    except Exception as e:
+        print(f"Error processing file: {e}")
+        log_event({"type": "error", "error": str(e)})
+        return f"[Error processing file: {e}]"
 
+# Периодические задачи
+async def auto_reload_core(background_tasks: BackgroundTasks):
+    """Периодически проверяет обновления конфигурации."""
+    global core_config, last_check
+    
+    current_time = time.time()
+    if current_time - last_check > CHECK_INTERVAL:
+        print("Checking for core configuration updates...")
+        new_config = await check_core_json()
+        if new_config:
+            core_config = new_config
+            print("Core configuration updated.")
+        last_check = current_time
+    
+    # Запланировать следующую проверку
+    background_tasks.add_task(check_wilderness, background_tasks)
+
+async def check_wilderness(background_tasks: BackgroundTasks):
+    """Периодически запускает wilderness excursion."""
+    global last_wilderness
+    
+    current_time = time.time()
+    hours_since_last = (current_time - last_wilderness) / 3600
+    
+    if hours_since_last > WILDERNESS_INTERVAL:
+        print("Starting scheduled wilderness excursion...")
+        await wilderness_excursion()
+        last_wilderness = current_time
+    
+    # Запланировать следующую проверку конфигурации
+    background_tasks.add_task(auto_reload_core, background_tasks)
+
+# Роуты
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(auto_reload_core())
-    asyncio.create_task(wilderness_excursion())
-    asyncio.create_task(daily_ping())
+    """Инициализация при запуске сервера."""
+    global core_config, last_check, last_wilderness
+    
+    print("Starting Selesta Assistant...")
+    core_config = await initialize_config()
+    last_check = time.time()
+    last_wilderness = time.time()
 
-@app.post("/webhook")
-async def telegram_webhook(request: Request):
-    data = await request.json()
-    update = types.Update(**data)
-    await dp.feed_update(bot, update)
-    return {"ok": True}
+@app.get("/")
+async def root():
+    """Корневой маршрут с основной информацией."""
+    return {
+        "name": AGENT_NAME,
+        "version": VERSION,
+        "status": "operational"
+    }
+
+@app.post("/message")
+async def handle_message(
+    background_tasks: BackgroundTasks,
+    request: Dict[str, Any] = Body(...)
+):
+    """Обрабатывает входящие текстовые сообщения."""
+    message = request.get("message", "")
+    chat_id = request.get("chat_id")
+    is_group = request.get("is_group", False)
+    username = request.get("username")
+    
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is required")
+    
+    # Запускаем периодические задачи
+    background_tasks.add_task(auto_reload_core, background_tasks)
+    
+    # Обрабатываем сообщение
+    response = await process_message(message, chat_id, is_group, username)
+    
+    return {"response": response}
+
+@app.post("/file")
+async def handle_file(
+    background_tasks: BackgroundTasks,
+    request: Dict[str, Any] = Body(...)
+):
+    """Обрабатывает загруженные файлы."""
+    file_path = request.get("file_path", "")
+    
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=400, detail="Valid file_path is required")
+    
+    # Запускаем периодические задачи
+    background_tasks.add_task(auto_reload_core, background_tasks)
+    
+    # Обрабатываем файл
+    content = await process_file(file_path)
+    
+    return {"content": content}
 
 @app.get("/healthz")
-async def healthz():
-    return {"status": EMOJI["healthz"]}
+async def healthcheck():
+    """Проверка работоспособности для мониторинга."""
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 @app.get("/status")
 async def status():
+    """Расширенный статус приложения."""
+    global core_config, last_check, last_wilderness
+    
     return {
-        "status": EMOJI["status"],
-        "comment": "✨",
-        "parting": "✨"
+        "status": "operational",
+        "version": VERSION,
+        "last_core_check": datetime.fromtimestamp(last_check).isoformat(),
+        "last_wilderness": datetime.fromtimestamp(last_wilderness).isoformat(),
+        "next_wilderness": (datetime.fromtimestamp(last_wilderness) + 
+                           timedelta(hours=WILDERNESS_INTERVAL)).isoformat(),
+        "config_version": core_config.get("version") if core_config else "unknown"
     }
+
+# Точка входа для запуска сервера
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
