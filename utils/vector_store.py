@@ -3,7 +3,7 @@ import glob
 import json
 import hashlib
 import asyncio
-from typing import Dict, List, Callable, Any, Optional, Union, Tuple
+from typing import Dict, List, Callable, Any, Optional, Union, Tuple, Awaitable
 import httpx
 from pinecone import Pinecone, PineconeException, ServerlessSpec
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type, wait_exponential
@@ -153,6 +153,22 @@ def save_vector_meta(meta: Dict[str, str]) -> None:
     except Exception as e:
         logger.error(f"Error saving vector meta: {e}")
 
+async def call_callback(callback: Optional[Callable[[str], Any]], message: str) -> None:
+    """Safely calls a callback with the given message.
+
+    The callback may be synchronous or asynchronous. Any raised exceptions
+    are logged and ignored so that vectorization continues uninterrupted.
+    """
+    if not callback:
+        return
+
+    try:
+        result = callback(message)
+        if isinstance(result, Awaitable):
+            await result
+    except Exception as e:
+        logger.error(f"Error in callback: {e}")
+
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=1, max=10),
@@ -291,31 +307,30 @@ async def vectorize_file(
     try:
         with open(fname, "r", encoding="utf-8") as f:
             text = f.read()
-        
+
         chunks = chunk_text(text)
-        
+
         for idx, chunk in enumerate(chunks):
             meta_id = f"{fname}:{idx}"
             try:
                 emb = await get_embedding(chunk, openai_api_key)
-                vector_index.upsert(vectors=[
-                    {
-                        "id": meta_id,
-                        "values": emb,
-                        "metadata": {"file": fname, "chunk": idx, "hash": current_hash}
-                    }
-                ])
+                vector_index.upsert(
+                    vectors=[
+                        {
+                            "id": meta_id,
+                            "values": emb,
+                            "metadata": {"file": fname, "chunk": idx, "hash": current_hash},
+                        }
+                    ]
+                )
                 upserted_ids.append(meta_id)
-                if on_message:
-                    await on_message(f"Upserted {meta_id}")
+                await call_callback(on_message, f"Upserted {meta_id}")
             except Exception as e:
                 logger.error(f"Error upserting vector {meta_id}: {e}")
-                if on_message:
-                    await on_message(f"Error upserting {meta_id}: {e}")
+                await call_callback(on_message, f"Error upserting {meta_id}: {e}")
     except Exception as e:
         logger.error(f"Error vectorizing file {fname}: {e}")
-        if on_message:
-            await on_message(f"Error vectorizing file {fname}: {e}")
+        await call_callback(on_message, f"Error vectorizing file {fname}: {e}")
     
     return upserted_ids
 
@@ -340,8 +355,7 @@ async def vectorize_all_files(
     """
     if not vector_index:
         logger.warning("Pinecone index not available, skipping vectorization")
-        if on_message:
-            await on_message("Vector store not available (Pinecone not configured)")
+        await call_callback(on_message, "Vector store not available (Pinecone not configured)")
         return {"upserted": [], "deleted": []}
     
     # Сканируем текущие файлы и загружаем предыдущие метаданные
@@ -382,8 +396,7 @@ async def vectorize_all_files(
             try:
                 vector_index.delete(ids=[meta_id])
                 deleted_ids.append(meta_id)
-                if on_message:
-                    await on_message(f"Deleted {meta_id}")
+                await call_callback(on_message, f"Deleted {meta_id}")
             except Exception:
                 # Если ID не существует, просто продолжаем
                 pass
@@ -392,15 +405,14 @@ async def vectorize_all_files(
     save_vector_meta(current)
     
     # Отправляем итоговое сообщение
-    if on_message:
-        summary = (
-            f"Vectorization complete. "
-            f"New/changed: {len(changed + new)} files, "
-            f"Removed: {len(removed)} files, "
-            f"Upserted: {len(upserted_ids)} chunks, "
-            f"Deleted: {len(deleted_ids)} chunks."
-        )
-        await on_message(summary)
+    summary = (
+        f"Vectorization complete. "
+        f"New/changed: {len(changed + new)} files, "
+        f"Removed: {len(removed)} files, "
+        f"Upserted: {len(upserted_ids)} chunks, "
+        f"Deleted: {len(deleted_ids)} chunks."
+    )
+    await call_callback(on_message, summary)
     
     return {"upserted": upserted_ids, "deleted": deleted_ids}
 
