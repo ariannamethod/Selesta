@@ -68,6 +68,27 @@ last_check = 0
 last_wilderness = 0
 memory_cache: Dict[str, List[Dict[str, Any]]] = {}  # Кэш для хранения контекста разговоров
 
+async def startup_vectorization() -> None:
+    """Проверяет и обновляет векторное хранилище после запуска."""
+    if not OPENAI_API_KEY:
+        return
+    try:
+        if await is_vector_store_available():
+            result = await vectorize_all_files(
+                openai_api_key=OPENAI_API_KEY,
+                force=False,
+                on_message=lambda msg: print(f"Vectorization: {msg}"),
+                path_patterns=[f"{CONFIG_DIR}/*.md", f"{CONFIG_DIR}/*.txt", f"{CONFIG_DIR}/*.json"]
+            )
+            print(
+                f"Vectorization complete: {len(result['upserted'])} chunks upserted, "
+                f"{len(result['deleted'])} chunks deleted"
+            )
+        else:
+            print("Vector store unavailable, skipping vectorization.")
+    except Exception as v_error:
+        print(f"Vectorization error: {v_error}")
+
 async def initialize_config() -> Dict[str, Any]:
     """Загружает и инициализирует конфигурацию Селесты."""
     try:
@@ -82,24 +103,8 @@ async def initialize_config() -> Dict[str, Any]:
                 print(f"Error loading local config: {e}")
                 core_config = {"agent_name": AGENT_NAME, "version": VERSION}
         
-        # Векторизация конфигурационных файлов для семантического поиска
-        if OPENAI_API_KEY:
-            print("Vectorizing config files...")
-            try:
-                # Проверяем доступность векторного хранилища
-                if await is_vector_store_available():
-                    result = await vectorize_all_files(
-                        openai_api_key=OPENAI_API_KEY,
-                        force=False,
-                        on_message=lambda msg: print(f"Vectorization: {msg}"),
-                        path_patterns=[f"{CONFIG_DIR}/*.md", f"{CONFIG_DIR}/*.txt", f"{CONFIG_DIR}/*.json"]
-                    )
-                    print(f"Vectorization complete: {len(result['upserted'])} chunks upserted")
-                else:
-                    print("Vector store unavailable, skipping vectorization.")
-            except Exception as v_error:
-                print(f"Vectorization error: {v_error}")
-        else:
+        # Векторизация будет запущена отдельно после старта приложения
+        if not OPENAI_API_KEY:
             print("Warning: OpenAI API key not set, skipping vectorization.")
         
         print(f"{AGENT_NAME} v{VERSION} initialized successfully.")
@@ -383,11 +388,13 @@ async def check_wilderness(background_tasks: BackgroundTasks) -> None:
 async def startup_event():
     """Инициализация при запуске сервера."""
     global core_config, last_check, last_wilderness
-    
+
     print(f"Starting {AGENT_NAME} Assistant v{VERSION}...")
     core_config = await initialize_config()
     last_check = time.time()
     last_wilderness = time.time()
+    # Запускаем векторизацию в фоне, чтобы не блокировать запуск
+    asyncio.create_task(startup_vectorization())
 
 @app.get("/")
 async def root():
