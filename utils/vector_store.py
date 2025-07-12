@@ -361,11 +361,16 @@ async def vectorize_all_files(
     # Сканируем текущие файлы и загружаем предыдущие метаданные
     current = scan_files(path_patterns)
     previous = load_vector_meta()
-    
+
     # Определяем измененные, новые и удаленные файлы
     changed = [f for f in current if (force or current[f] != previous.get(f))]
     new = [f for f in current if f not in previous]
     removed = [f for f in previous if f not in current]
+
+    # Если нет изменений и не запрошено принудительное обновление, просто выходим
+    if not changed and not new and not removed and not force:
+        await call_callback(on_message, "Vector store already up to date")
+        return {"upserted": [], "deleted": []}
     
     upserted_ids = []
     tasks = []
