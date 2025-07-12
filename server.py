@@ -36,6 +36,7 @@ CHECK_INTERVAL = 3600  # Проверка конфигурации каждый 
 WILDERNESS_INTERVAL = 72  # Wilderness excursion каждые 72 часа
 TRIGGER_WORDS = ["нарисуй", "представь", "визуализируй", "изобрази", "draw", "imagine", "visualize"]
 MAX_RESPONSE_LENGTH = 4096  # Максимальная длина одного сообщения
+WEBHOOK_TIMEOUT = 8  # Максимальное время ожидания ответа для вебхука (секунды)
 
 # Пути для файлов
 UPLOADS_DIR = "uploads"
@@ -494,8 +495,15 @@ async def webhook(
             # Запускаем периодические задачи
             background_tasks.add_task(auto_reload_core, background_tasks)
             
-            # Обрабатываем сообщение
-            response = await process_message(message, chat_id, is_group, username)
+            # Обрабатываем сообщение с таймаутом, чтобы избежать ошибок 499
+            try:
+                response = await asyncio.wait_for(
+                    process_message(message, chat_id, is_group, username),
+                    timeout=WEBHOOK_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                log_event({"type": "webhook_timeout", "chat_id": chat_id})
+                return {"status": "timeout", "chat_id": chat_id}
             
             # Возвращаем ответ для дальнейшей обработки через API Telegram
             if isinstance(response, list):
