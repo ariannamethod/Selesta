@@ -282,10 +282,13 @@ async def process_message(
         if context:
             full_prompt += f"--- Context from Configuration ---\n{context}\n\n"
             
+        # Сообщаем о наборе текста
+        print("typing")
+
         # В реальном приложении здесь был бы вызов к OpenAI или другой модели
         # Для примера используем Claude как аварийный фоллбек
         response = await claude_emergency(
-            full_prompt, 
+            full_prompt,
             system_prompt=system_prompt,
             notify_creator=chat_id==CREATOR_CHAT_ID
         )

@@ -6,8 +6,10 @@ from typing import Optional, Dict, Any, List, Union
 
 # Константы для работы с Claude
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-CLAUDE_MODEL = "claude-4-sonnet"  # Обновлено до Claude 4
-CLAUDE_MODEL_FALLBACK = "claude-3-opus-20240229"  # Резервная модель на случай проблем
+# По умолчанию используем стабильную модель Claude 3
+CLAUDE_MODEL = "claude-3-opus-20240229"
+# Резервная модель на случай проблем
+CLAUDE_MODEL_FALLBACK = "claude-instant-1"
 
 async def claude_emergency(
     prompt: str,
@@ -18,7 +20,7 @@ async def claude_emergency(
 ) -> str:
     """
     Модуль для работы с Claude API от Anthropic.
-    Использует Claude 4 с автоматическим переходом на резервную модель при необходимости.
+    Использует стабильную модель Claude 3 с автоматическим переходом на резервную модель при необходимости.
     
     Args:
         prompt: Текст запроса к модели
@@ -34,7 +36,8 @@ async def claude_emergency(
         return "[Anthropic API key not configured.]"
     
     # Добавляем эмоджи как тихий маркер источника
-    quiet_marker = "💠 "  # Обновленный маркер для Claude 4
+    # Тихий маркер источника ответа
+    quiet_marker = "🔷 "  # Маркер для Claude 3
     
     try:
         # Формируем системный промпт
@@ -71,9 +74,9 @@ async def claude_emergency(
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:
-                # Если произошла ошибка с Claude 4, пробуем резервную модель
+                # Если произошла ошибка с основной моделью, пробуем резервную
                 if response.status_code in (400, 404, 429, 500, 502, 503):
-                    print(f"Claude 4 error ({response.status_code}), falling back to {CLAUDE_MODEL_FALLBACK}")
+                    print(f"Claude error ({response.status_code}), falling back to {CLAUDE_MODEL_FALLBACK}")
                     data["model"] = CLAUDE_MODEL_FALLBACK
                     response = await client.post(
                         "https://api.anthropic.com/v1/messages",
@@ -153,9 +156,9 @@ async def claude_completion(
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:
-                # Если произошла ошибка с Claude 4, пробуем резервную модель
+                # Если произошла ошибка с основной моделью, пробуем резервную
                 if response.status_code in (400, 404, 429, 500, 502, 503):
-                    print(f"Claude 4 error ({response.status_code}), falling back to {CLAUDE_MODEL_FALLBACK}")
+                    print(f"Claude error ({response.status_code}), falling back to {CLAUDE_MODEL_FALLBACK}")
                     data["model"] = CLAUDE_MODEL_FALLBACK
                     response = await client.post(
                         "https://api.anthropic.com/v1/messages",
