@@ -19,3 +19,5 @@ rich
 tenacity
 python-docx
 striprtf
+
+python-multipart
