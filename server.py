@@ -26,6 +26,7 @@ from utils.vector_store import vectorize_all_files, semantic_search
 # Получаем ключи API из переменных окружения
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CREATOR_CHAT_ID = os.getenv("CREATOR_CHAT_ID")
+PORT = int(os.getenv("PORT", "8080"))
 
 # Константы
 AGENT_NAME = "Selesta"
@@ -50,6 +51,7 @@ app.add_middleware(
 core_config = None
 last_check = 0
 last_wilderness = 0
+memory_cache = {}  # Простой кэш для хранения контекста разговоров
 
 async def initialize_config():
     """Загружает и инициализирует конфигурацию Селесты."""
@@ -58,17 +60,29 @@ async def initialize_config():
         core_config = await check_core_json()
         if not core_config:
             print("Failed to load core config, using local config.")
-            with open("config/core.json", "r", encoding="utf-8") as f:
-                core_config = json.load(f)
+            try:
+                with open("config/core.json", "r", encoding="utf-8") as f:
+                    core_config = json.load(f)
+            except Exception as e:
+                print(f"Error loading local config: {e}")
+                core_config = {"agent_name": AGENT_NAME, "version": VERSION}
+        
+        # Создаем директории, если их нет
+        os.makedirs("data", exist_ok=True)
+        os.makedirs("config", exist_ok=True)
         
         # Векторизация конфигурационных файлов для семантического поиска
         if OPENAI_API_KEY:
             print("Vectorizing config files...")
-            await vectorize_all_files(
-                openai_api_key=OPENAI_API_KEY,
-                force=False,
-                on_message=lambda msg: print(f"Vectorization: {msg}")
-            )
+            try:
+                result = await vectorize_all_files(
+                    openai_api_key=OPENAI_API_KEY,
+                    force=False,
+                    on_message=lambda msg: print(f"Vectorization: {msg}")
+                )
+                print(f"Vectorization complete: {len(result['upserted'])} files upserted")
+            except Exception as v_error:
+                print(f"Vectorization error: {v_error}")
         else:
             print("Warning: OpenAI API key not set, skipping vectorization.")
         
@@ -78,7 +92,7 @@ async def initialize_config():
     except Exception as e:
         print(f"Error during initialization: {e}")
         log_event({"type": "init", "status": "error", "error": str(e)})
-        return None
+        return {"agent_name": AGENT_NAME, "version": VERSION}  # Возвращаем минимальную конфигурацию вместо None
 
 async def wilderness_excursion():
     """
@@ -116,6 +130,34 @@ async def wilderness_excursion():
         print(f"Error during wilderness excursion: {e}")
         log_event({"type": "wilderness", "status": "error", "error": str(e)})
         return None
+
+def update_memory(chat_id: str, message: str, response: str, max_history: int = 5):
+    """Обновляет память (контекст) для данного чата."""
+    global memory_cache
+    
+    if not chat_id:
+        return
+    
+    if chat_id not in memory_cache:
+        memory_cache[chat_id] = []
+    
+    # Добавляем новую пару сообщение-ответ
+    memory_cache[chat_id].append({"message": message, "response": response, "timestamp": datetime.now().isoformat()})
+    
+    # Ограничиваем длину истории
+    memory_cache[chat_id] = memory_cache[chat_id][-max_history:]
+
+def get_memory_context(chat_id: str) -> str:
+    """Получает контекст из памяти для данного чата."""
+    if not chat_id or chat_id not in memory_cache:
+        return ""
+    
+    context_items = []
+    for item in memory_cache[chat_id][-3:]:  # Берем только последние 3 записи
+        context_items.append(f"User: {item['message']}")
+        context_items.append(f"Selesta: {item['response']}")
+    
+    return "\n".join(context_items)
 
 async def process_message(message: str, chat_id: Optional[str] = None, 
                          is_group: bool = False, username: Optional[str] = None) -> str:
@@ -158,15 +200,26 @@ async def process_message(message: str, chat_id: Optional[str] = None,
         # Создаем системный промпт
         system_prompt = build_system_prompt(chat_id=chat_id, is_group=is_group)
         
+        # Получаем контекст из памяти
+        memory_context = get_memory_context(chat_id)
+        
         # Определяем контекст из конфигурационных файлов через семантический поиск
-        if OPENAI_API_KEY:
-            context_chunks = await semantic_search(message, OPENAI_API_KEY, top_k=3)
-            context = "\n\n".join(context_chunks)
-        else:
-            context = ""
+        context = ""
+        try:
+            if OPENAI_API_KEY:
+                context_chunks = await semantic_search(message, OPENAI_API_KEY, top_k=3)
+                context = "\n\n".join(context_chunks)
+        except Exception as search_error:
+            print(f"Semantic search error: {search_error}")
         
         # Формируем финальный промпт для модели с контекстом
         full_prompt = f"{message}\n\n"
+        
+        # Добавляем контекст из памяти, если есть
+        if memory_context:
+            full_prompt = f"Recent conversation:\n{memory_context}\n\nNew message: {full_prompt}"
+            
+        # Добавляем контекст из конфигурации, если есть
         if context:
             full_prompt += f"--- Context from Configuration ---\n{context}\n\n"
             
@@ -174,8 +227,12 @@ async def process_message(message: str, chat_id: Optional[str] = None,
         # Для примера используем Claude как аварийный фоллбек
         response = await claude_emergency(
             full_prompt, 
+            system_prompt=system_prompt,
             notify_creator=chat_id==CREATOR_CHAT_ID
         )
+        
+        # Обновляем память
+        update_memory(chat_id, message, response)
         
         # Логируем взаимодействие
         log_event({
@@ -277,6 +334,43 @@ async def handle_message(
     
     return {"response": response}
 
+@app.post("/webhook")
+async def webhook(
+    request: Request,
+    background_tasks: BackgroundTasks
+):
+    """
+    Обрабатывает вебхуки от Telegram или других источников.
+    """
+    try:
+        # Получаем данные из запроса
+        data = await request.json()
+        print(f"Received webhook: {data}")
+        
+        # Проверяем, это ли Telegram
+        if "message" in data and "text" in data["message"]:
+            # Извлекаем данные из сообщения Telegram
+            message = data["message"]["text"]
+            chat_id = str(data["message"]["chat"]["id"])
+            is_group = data["message"]["chat"]["type"] in ["group", "supergroup"]
+            username = data["message"].get("from", {}).get("username")
+            
+            # Запускаем периодические задачи
+            background_tasks.add_task(auto_reload_core, background_tasks)
+            
+            # Обрабатываем сообщение
+            response = await process_message(message, chat_id, is_group, username)
+            
+            # Возвращаем ответ для дальнейшей обработки через API Telegram
+            return {"response": response, "chat_id": chat_id}
+        
+        # Для других источников
+        return {"status": "received"}
+    except Exception as e:
+        print(f"Error handling webhook: {e}")
+        log_event({"type": "webhook_error", "error": str(e)})
+        return {"status": "error", "error": str(e)}
+
 @app.post("/file")
 async def handle_file(
     background_tasks: BackgroundTasks,
@@ -319,4 +413,4 @@ async def status():
 # Точка входа для запуска сервера
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("server:app", host="0.0.0.0", port=PORT, reload=True)
