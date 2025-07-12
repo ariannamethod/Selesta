@@ -4,7 +4,7 @@ import asyncio
 import random
 import time
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, Union, Callable
+from typing import Optional, List, Dict, Any, Union, Callable, Annotated
 
 # FastAPI для API-сервера
 from fastapi import FastAPI, Request, Body, BackgroundTasks, HTTPException, Depends, File, UploadFile
@@ -402,7 +402,7 @@ async def root():
 @app.post("/message")
 async def handle_message(
     background_tasks: BackgroundTasks,
-    request: Dict[str, Any] = Body(...)
+    request: Annotated[Dict[str, Any], Body(...)]
 ) -> Dict[str, Any]:
     """
     Обрабатывает входящие текстовые сообщения.
@@ -484,8 +484,8 @@ async def webhook(
 @app.post("/upload")
 async def upload_file(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...)
-) -> Dict[str, str]:
+    file: Annotated[UploadFile, File(...)]
+) -> Dict[str, Any]:
     """
     Загружает файл и сохраняет его на сервере.
     
@@ -494,7 +494,7 @@ async def upload_file(
         file: Загруженный файл
         
     Returns:
-        Dict[str, str]: Информация о загруженном файле
+        Dict[str, Any]: Информация о загруженном файле
     """
     try:
         # Создаем имя файла с временной меткой
@@ -526,8 +526,8 @@ async def upload_file(
 @app.post("/file")
 async def handle_file(
     background_tasks: BackgroundTasks,
-    request: Dict[str, Any] = Body(...)
-) -> Dict[str, str]:
+    request: Annotated[Dict[str, Any], Body(...)]
+) -> Dict[str, Any]:
     """
     Обрабатывает загруженные файлы.
     
@@ -536,7 +536,7 @@ async def handle_file(
         request: Тело запроса с путем к файлу
         
     Returns:
-        Dict[str, str]: Извлеченный текст из файла
+        Dict[str, Any]: Извлеченный текст из файла
     """
     file_path = request.get("file_path", "")
     
