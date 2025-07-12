@@ -67,10 +67,20 @@ core_config = None
 last_check = 0
 last_wilderness = 0
 memory_cache: Dict[str, List[Dict[str, Any]]] = {}  # Кэш для хранения контекста разговоров
+# Флаг для предотвращения повторной векторизации при множественных стартах
+vectorization_done = False
 
 async def startup_vectorization() -> None:
-    """Проверяет и обновляет векторное хранилище после запуска."""
-    if not OPENAI_API_KEY:
+    """Проверяет и обновляет векторное хранилище после запуска.
+
+    Защита от повторного запуска нужна, поскольку в некоторых окружениях
+    событие старта может происходить несколько раз (например, при
+    перезапуске воркеров). Флаг ``vectorization_done`` гарантирует, что
+    векторизация выполняется только один раз за процесс.
+    """
+    global vectorization_done
+
+    if vectorization_done or not OPENAI_API_KEY:
         return
     try:
         if await is_vector_store_available():
@@ -88,6 +98,8 @@ async def startup_vectorization() -> None:
             print("Vector store unavailable, skipping vectorization.")
     except Exception as v_error:
         print(f"Vectorization error: {v_error}")
+    finally:
+        vectorization_done = True
 
 async def initialize_config() -> Dict[str, Any]:
     """Загружает и инициализирует конфигурацию Селесты."""
