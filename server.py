@@ -69,6 +69,8 @@ last_wilderness = 0
 memory_cache: Dict[str, List[Dict[str, Any]]] = {}  # Кэш для хранения контекста разговоров
 # Флаг для предотвращения повторной векторизации при множественных стартах
 vectorization_done = False
+# Персистентный файл-замок, чтобы векторизация выполнялась только однажды
+VECTOR_LOCK_FILE = os.path.join(DATA_DIR, "vectorization.lock")
 
 async def startup_vectorization() -> None:
     """Проверяет и обновляет векторное хранилище после запуска.
@@ -80,7 +82,7 @@ async def startup_vectorization() -> None:
     """
     global vectorization_done
 
-    if vectorization_done or not OPENAI_API_KEY:
+    if vectorization_done or os.path.exists(VECTOR_LOCK_FILE) or not OPENAI_API_KEY:
         return
     try:
         if await is_vector_store_available():
@@ -94,6 +96,12 @@ async def startup_vectorization() -> None:
                 f"Vectorization complete: {len(result['upserted'])} chunks upserted, "
                 f"{len(result['deleted'])} chunks deleted"
             )
+            # Создаем файл-замок после успешной векторизации
+            try:
+                with open(VECTOR_LOCK_FILE, "w") as _lock:
+                    _lock.write(datetime.utcnow().isoformat())
+            except Exception:
+                pass
         else:
             print("Vector store unavailable, skipping vectorization.")
     except Exception as v_error:

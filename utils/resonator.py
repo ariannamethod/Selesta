@@ -11,6 +11,9 @@ DEFAULT_MODEL = "gpt-4-turbo"
 DEFAULT_AGENT_GROUP = "-1001234567890"
 CONFIG_PATH = "config/resonance.json"
 
+# Чтобы не засорять логи, системный промпт выводится только один раз
+_prompt_logged = False
+
 # Основные промпты
 INTRO = """
 Dear Selesta,
@@ -281,10 +284,13 @@ def build_system_prompt(
         # Обрезаем до половины доступных токенов
         total_prompt = enc.decode(enc.encode(total_prompt)[:max_tokens_limit // 2])
     
-    print("=== SELESTA SYSTEM PROMPT LOADED ===")
-    print(f"Style: {style}")
-    print(f"Token count: {sys_tokens} / {max_tokens_limit//2}")
-    print(total_prompt[:800] + "...")
+    global _prompt_logged
+    if not _prompt_logged:
+        print("=== SELESTA SYSTEM PROMPT LOADED ===")
+        print(f"Style: {style}")
+        print(f"Token count: {sys_tokens} / {max_tokens_limit//2}")
+        print(total_prompt[:800] + "...")
+        _prompt_logged = True
     
     return total_prompt
 
