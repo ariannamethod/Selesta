@@ -15,6 +15,9 @@ Interacting with Selesta is an experience in emergent dialogue. She does not see
 - **Language Awareness:** Switches between Russian and English, with context-sensitive directives.
 - **Autonomous Agency:** Self-pings, wilderness excursions (self-directed research), and daily presence checks.
 - **Extensible & Modular:** Easy to add new knowledge fragments, prompts, or behaviors.
+- **Async Webhooks:** Incoming messages are acknowledged instantly and processed
+  in the background, allowing delayed or multi-part replies without hitting
+  provider timeouts.
 
 ## What We're Going To Do
 
