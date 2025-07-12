@@ -469,6 +469,10 @@ async def semantic_search(
             metadata = match.get("metadata", {})
             fname = metadata.get("file")
             chunk_idx = metadata.get("chunk")
+            if isinstance(chunk_idx, float):
+                chunk_idx = int(chunk_idx)
+            elif isinstance(chunk_idx, str) and chunk_idx.isdigit():
+                chunk_idx = int(chunk_idx)
             
             # Получаем текст чанка из файла
             try:
