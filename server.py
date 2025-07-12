@@ -22,6 +22,7 @@ from utils.resonator import build_system_prompt, get_random_wilderness_topic
 from utils.text_helpers import extract_text_from_url, fuzzy_match, summarize_text
 from utils.text_processing import process_text, send_long_message
 from utils.vector_store import vectorize_all_files, semantic_search, is_vector_store_available
+from utils.telegram_sender import send_message, send_multipart_message
 
 # Получаем ключи API из переменных окружения
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -36,7 +37,6 @@ CHECK_INTERVAL = 3600  # Проверка конфигурации каждый 
 WILDERNESS_INTERVAL = 72  # Wilderness excursion каждые 72 часа
 TRIGGER_WORDS = ["нарисуй", "представь", "визуализируй", "изобрази", "draw", "imagine", "visualize"]
 MAX_RESPONSE_LENGTH = 4096  # Максимальная длина одного сообщения
-WEBHOOK_TIMEOUT = 8  # Максимальное время ожидания ответа для вебхука (секунды)
 
 # Пути для файлов
 UPLOADS_DIR = "uploads"
@@ -464,6 +464,21 @@ async def handle_message(
     else:
         return {"response": response, "multi_part": False}
 
+async def process_and_send_response(
+    message: str, chat_id: str, is_group: bool, username: Optional[str]
+) -> None:
+    """Process a message and send the response via Telegram asynchronously."""
+    try:
+        response = await process_message(message, chat_id, is_group, username)
+
+        if isinstance(response, list):
+            await send_multipart_message(chat_id, response)
+        else:
+            await send_message(chat_id, response)
+    except Exception as e:
+        print(f"Error in process_and_send_response: {e}")
+        log_event({"type": "send_error", "error": str(e), "chat_id": chat_id})
+
 @app.post("/webhook")
 async def webhook(
     request: Request,
@@ -494,22 +509,12 @@ async def webhook(
             
             # Запускаем периодические задачи
             background_tasks.add_task(auto_reload_core, background_tasks)
-            
-            # Обрабатываем сообщение с таймаутом, чтобы избежать ошибок 499
-            try:
-                response = await asyncio.wait_for(
-                    process_message(message, chat_id, is_group, username),
-                    timeout=WEBHOOK_TIMEOUT
-                )
-            except asyncio.TimeoutError:
-                log_event({"type": "webhook_timeout", "chat_id": chat_id})
-                return {"status": "timeout", "chat_id": chat_id}
-            
-            # Возвращаем ответ для дальнейшей обработки через API Telegram
-            if isinstance(response, list):
-                return {"response_parts": response, "chat_id": chat_id, "multi_part": True}
-            else:
-                return {"response": response, "chat_id": chat_id, "multi_part": False}
+
+            # Обрабатываем сообщение в фоне и сразу отвечаем webhook
+            background_tasks.add_task(
+                process_and_send_response, message, chat_id, is_group, username
+            )
+            return {"status": "accepted", "chat_id": chat_id}
         
         # Для других источников
         return {"status": "received"}
