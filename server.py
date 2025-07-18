@@ -267,10 +267,10 @@ async def process_message(
         # Voice mode commands
         if chat_id and message.strip().lower() == "/voiceon":
             voice_mode[chat_id] = True
-            return "Voice mode enabled"
+            return "📢"  # Megaphone emoji indicates voice mode is on
         if chat_id and message.strip().lower() == "/voiceoff":
             voice_mode[chat_id] = False
-            return "Voice mode disabled"
+            return "🔇"  # Muted speaker emoji indicates voice mode is off
 
         # Проверка на триггеры для создания изображения
         if any(trigger in message.lower() for trigger in TRIGGER_WORDS) or message.startswith("/draw"):
@@ -507,7 +507,7 @@ async def process_and_send_response(
         await send_typing(chat_id)
         response = await process_message(message, chat_id, is_group, username)
 
-        if voice_mode.get(chat_id):
+        if voice_mode.get(chat_id) and message.strip().lower() not in ["/voiceon", "/voiceoff"]:
             text_resp = response if not isinstance(response, list) else "\n\n".join(response)
             voice_file = os.path.join(UPLOADS_DIR, f"reply_{int(time.time())}.mp3")
             await text_to_speech(text_resp, voice_file)
