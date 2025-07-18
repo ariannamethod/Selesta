@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import time
+import random
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Union
 
@@ -44,6 +45,11 @@ WILDERNESS_INTERVAL = 72  # Wilderness excursion каждые 72 часа
 TRIGGER_WORDS = ["нарисуй", "представь", "визуализируй", "изобрази", "draw", "imagine", "visualize"]
 MAX_RESPONSE_LENGTH = 4096  # Максимальная длина одного сообщения
 MAX_PARAGRAPHS = int(os.getenv("MAX_PARAGRAPHS", "3"))
+
+# Имя бота и дополнительные параметры для группового поведения
+BOT_USERNAME = os.getenv("BOT_USERNAME", "").lower()
+NAME_ALIASES = ["селеста", "selesta", "celesta"]
+GROUP_DELAY_RANGE = (40, 240)  # Задержка ответов в группах (секунды)
 
 # Пути для файлов
 UPLOADS_DIR = "uploads"
@@ -245,12 +251,26 @@ def get_memory_context(chat_id: str) -> str:
     
     return "\n".join(context_items)
 
+def should_reply_in_group(message: str, reply_to_bot: bool = False) -> bool:
+    """Determines whether Selesta should reply in a group chat."""
+    text = message.lower()
+    if reply_to_bot:
+        return True
+    if any(alias in text for alias in NAME_ALIASES):
+        return True
+    if BOT_USERNAME and f"@{BOT_USERNAME}" in text:
+        return True
+    if any(t in text for t in TRIGGER_WORDS):
+        return True
+    return False
+
 async def process_message(
-    message: str, 
-    chat_id: Optional[str] = None, 
-    is_group: bool = False, 
-    username: Optional[str] = None
-) -> Union[str, List[str]]:
+    message: str,
+    chat_id: Optional[str] = None,
+    is_group: bool = False,
+    username: Optional[str] = None,
+    reply_to_bot: bool = False,
+) -> Union[str, List[str], None]:
     """
     Основная функция обработки сообщений от пользователя.
     Возвращает ответ Селесты.
@@ -262,7 +282,7 @@ async def process_message(
         username: Имя пользователя
         
     Returns:
-        Union[str, List[str]]: Ответ Селесты (одно сообщение или список сообщений)
+        Union[str, List[str], None]: Ответ Селесты или ``None`` если ответа нет
     """
     try:
         # Voice mode commands
@@ -272,6 +292,10 @@ async def process_message(
         if chat_id and message.strip().lower() == "/voiceoff":
             voice_mode[chat_id] = False
             return "🔇"  # Muted speaker emoji indicates voice mode is off
+
+        # В группах отвечаем только при наличии триггеров
+        if is_group and not should_reply_in_group(message, reply_to_bot):
+            return None
 
         language = None
         try:
@@ -511,16 +535,25 @@ async def handle_message(
     chat_id = request.get("chat_id")
     is_group = request.get("is_group", False)
     username = request.get("username")
+    reply_to_bot = request.get("reply_to_bot", False)
     
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
     
     
     # Обрабатываем сообщение
-    response = await process_message(message, chat_id, is_group, username)
+    response = await process_message(
+        message,
+        chat_id,
+        is_group,
+        username,
+        reply_to_bot=reply_to_bot,
+    )
     
     # Проверяем формат ответа
-    if isinstance(response, list):
+    if response is None:
+        return {"response": None, "multi_part": False}
+    elif isinstance(response, list):
         return {"response_parts": response, "multi_part": True}
     else:
         return {"response": response, "multi_part": False}
@@ -530,12 +563,32 @@ async def process_and_send_response(
     chat_id: str,
     is_group: bool,
     username: Optional[str],
+    reply_to_bot: bool = False,
     reply_to_message_id: Optional[int] = None,
 ) -> None:
     """Process a message and send the response via Telegram asynchronously."""
     try:
+        if is_group and not should_reply_in_group(message, reply_to_bot):
+            return
+
+        if is_group:
+            await asyncio.sleep(
+                GROUP_DELAY_RANGE[0]
+                if GROUP_DELAY_RANGE[0] == GROUP_DELAY_RANGE[1]
+                else random.uniform(*GROUP_DELAY_RANGE)
+            )
+
         await send_typing(chat_id)
-        response = await process_message(message, chat_id, is_group, username)
+        response = await process_message(
+            message,
+            chat_id,
+            is_group,
+            username,
+            reply_to_bot=reply_to_bot,
+        )
+
+        if response is None:
+            return
 
         if voice_mode.get(chat_id) and message.strip().lower() not in ["/voiceon", "/voiceoff"]:
             text_resp = response if not isinstance(response, list) else "\n\n".join(response)
@@ -597,12 +650,19 @@ async def webhook(
                 message = ""
             
             # Обрабатываем сообщение в фоне и сразу отвечаем webhook
+            reply_to_bot = False
+            if "reply_to_message" in data["message"]:
+                orig = data["message"]["reply_to_message"].get("from", {})
+                if orig.get("is_bot") and (not BOT_USERNAME or orig.get("username", "").lower() == BOT_USERNAME):
+                    reply_to_bot = True
+
             background_tasks.add_task(
                 process_and_send_response,
                 message,
                 chat_id,
                 is_group,
                 username,
+                reply_to_bot,
                 message_id,
             )
             return {"status": "accepted", "chat_id": chat_id}
