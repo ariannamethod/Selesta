@@ -508,8 +508,12 @@ async def process_and_send_response(
             text_resp = response if not isinstance(response, list) else "\n\n".join(response)
             voice_file = os.path.join(UPLOADS_DIR, f"reply_{int(time.time())}.mp3")
             await text_to_speech(text_resp, voice_file)
-            await send_audio_message(chat_id, voice_file, reply_to_message_id=reply_to_message_id)
-            sent = await send_message(chat_id, text_resp, reply_to_message_id)
+            sent = await send_audio_message(
+                chat_id,
+                voice_file,
+                caption=text_resp,
+                reply_to_message_id=reply_to_message_id,
+            )
         else:
             if isinstance(response, list):
                 sent = await send_multipart_message(chat_id, response, reply_to_message_id=reply_to_message_id)
