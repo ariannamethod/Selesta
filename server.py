@@ -72,6 +72,8 @@ memory_cache: Dict[str, List[Dict[str, Any]]] = {}  # Кэш для хранен
 vectorization_done = False
 # Персистентный файл-замок, чтобы векторизация выполнялась только однажды
 VECTOR_LOCK_FILE = os.path.join(DATA_DIR, "vectorization.lock")
+# Минимальное время между повторными векторизациями (24 часа)
+VECTOR_LOCK_TTL = 24 * 3600
 
 async def startup_vectorization() -> None:
     """Проверяет и обновляет векторное хранилище после запуска.
@@ -83,8 +85,21 @@ async def startup_vectorization() -> None:
     """
     global vectorization_done
 
-    if vectorization_done or os.path.exists(VECTOR_LOCK_FILE) or not OPENAI_API_KEY:
+    if vectorization_done or not OPENAI_API_KEY:
         return
+
+    if os.path.exists(VECTOR_LOCK_FILE):
+        try:
+            with open(VECTOR_LOCK_FILE, "r") as _lock:
+                ts = _lock.read().strip()
+            last_time = datetime.fromisoformat(ts)
+            if (datetime.utcnow() - last_time).total_seconds() < VECTOR_LOCK_TTL:
+                print("Vectorization recently performed, skipping.")
+                vectorization_done = True
+                return
+        except Exception:
+            # При ошибке чтения файла просто продолжаем
+            pass
     try:
         if await is_vector_store_available():
             result = await vectorize_all_files(
