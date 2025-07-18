@@ -10,9 +10,29 @@ MAX_TOKENS_DEFAULT = 27000
 DEFAULT_MODEL = "gpt-4-turbo"
 DEFAULT_AGENT_GROUP = "-1001234567890"
 CONFIG_PATH = "config/resonance.json"
+PERSONA_FILE_DEFAULT = "config/SELESTA_PERSONA.md"
 
 # Чтобы не засорять логи, системный промпт выводится только один раз
 _prompt_logged = False
+
+def _load_persona() -> str:
+    """Loads persona text from environment variable or file."""
+    env_val = os.getenv("SELESTA_PERSONA")
+    if env_val:
+        if os.path.isfile(env_val):
+            try:
+                with open(env_val, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+        return env_val.strip()
+    try:
+        with open(PERSONA_FILE_DEFAULT, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+PERSONA_TEXT = _load_persona()
 
 # Основные промпты
 INTRO = """
@@ -255,6 +275,7 @@ def build_system_prompt(
     style_instructions = get_style_instructions(style)
     
     # Формируем базовый промпт
+    persona = PERSONA_TEXT if PERSONA_TEXT else INTRO
     special_intro = SPECIAL_INTRO.format(agent_group=agent_group)
     ethics = GROUP_ETHICS if is_group else ""
     
@@ -270,6 +291,7 @@ def build_system_prompt(
     # Собираем все части промпта
     total_prompt = (
         f"{current_time}\n\n"
+        f"{persona}\n\n"
         f"{special_intro}\n\n"
         f"{style_instructions}\n\n"
         f"{ethics}\n\n"
