@@ -55,12 +55,12 @@ async def text_to_speech(text: str, output_path: str) -> str:
 
     try:
         client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
-        resp = await client.audio.speech.with_streaming_response.create(
+        async with client.audio.speech.with_streaming_response.create(
             model="tts-1",
             voice="alloy",
             input=text,
-        )
-        await resp.stream_to_file(output_path)
+        ) as resp:
+            await resp.stream_to_file(output_path)
         return output_path
     except Exception as e:
         print(f"TTS error: {e}")
