@@ -22,7 +22,13 @@ from utils.resonator import build_system_prompt, get_random_wilderness_topic
 from utils.text_helpers import extract_text_from_url, fuzzy_match, summarize_text
 from utils.text_processing import process_text, send_long_message
 from utils.vector_store import vectorize_all_files, semantic_search, is_vector_store_available
-from utils.telegram_sender import send_message, send_multipart_message
+from utils.telegram_sender import (
+    send_message,
+    send_multipart_message,
+    send_typing,
+    send_audio_message,
+)
+from utils.voice import download_telegram_file, transcribe_audio, text_to_speech
 
 # Получаем ключи API из переменных окружения
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -68,6 +74,8 @@ core_config = None
 last_check = 0
 last_wilderness = 0
 memory_cache: Dict[str, List[Dict[str, Any]]] = {}  # Кэш для хранения контекста разговоров
+# Режим голосовых ответов для чатов
+voice_mode: Dict[str, bool] = {}
 # Флаг для предотвращения повторной векторизации при множественных стартах
 vectorization_done = False
 # Персистентный файл-замок, чтобы векторизация выполнялась только однажды
@@ -256,6 +264,14 @@ async def process_message(
         Union[str, List[str]]: Ответ Селесты (одно сообщение или список сообщений)
     """
     try:
+        # Voice mode commands
+        if chat_id and message.strip().lower() == "/voiceon":
+            voice_mode[chat_id] = True
+            return "Voice mode enabled"
+        if chat_id and message.strip().lower() == "/voiceoff":
+            voice_mode[chat_id] = False
+            return "Voice mode disabled"
+
         # Проверка на триггеры для создания изображения
         if any(trigger in message.lower() for trigger in TRIGGER_WORDS) or message.startswith("/draw"):
             # Очищаем запрос от триггера
@@ -318,8 +334,7 @@ async def process_message(
         if context:
             full_prompt += f"--- Context from Configuration ---\n{context}\n\n"
             
-        # Сообщаем о наборе текста
-        print("typing")
+
 
         # В реальном приложении здесь был бы вызов к OpenAI или другой модели
         # Для примера используем Claude как аварийный фоллбек
@@ -484,12 +499,20 @@ async def process_and_send_response(
 ) -> None:
     """Process a message and send the response via Telegram asynchronously."""
     try:
+        await send_typing(chat_id)
         response = await process_message(message, chat_id, is_group, username)
 
-        if isinstance(response, list):
-            sent = await send_multipart_message(chat_id, response)
+        if voice_mode.get(chat_id):
+            text_resp = response if not isinstance(response, list) else "\n\n".join(response)
+            voice_file = os.path.join(UPLOADS_DIR, f"reply_{int(time.time())}.mp3")
+            await text_to_speech(text_resp, voice_file)
+            await send_audio_message(chat_id, voice_file)
+            sent = await send_message(chat_id, text_resp)
         else:
-            sent = await send_message(chat_id, response)
+            if isinstance(response, list):
+                sent = await send_multipart_message(chat_id, response)
+            else:
+                sent = await send_message(chat_id, response)
 
         if not sent:
             log_event({"type": "send_error", "chat_id": chat_id, "message": "delivery failed"})
@@ -518,12 +541,20 @@ async def webhook(
         print(f"Received webhook data")
         
         # Проверяем, это ли Telegram
-        if "message" in data and "text" in data["message"]:
-            # Извлекаем данные из сообщения Telegram
-            message = data["message"]["text"]
-            chat_id = str(data["message"]["chat"]["id"])
-            is_group = data["message"]["chat"]["type"] in ["group", "supergroup"]
+        if "message" in data:
+            chat = data["message"].get("chat", {})
+            chat_id = str(chat.get("id"))
+            is_group = chat.get("type") in ["group", "supergroup"]
             username = data["message"].get("from", {}).get("username")
+            if "text" in data["message"]:
+                message = data["message"]["text"]
+            elif "voice" in data["message"]:
+                file_id = data["message"]["voice"]["file_id"]
+                temp_path = os.path.join(UPLOADS_DIR, f"{file_id}.ogg")
+                downloaded = await download_telegram_file(file_id, temp_path)
+                message = await transcribe_audio(downloaded) if downloaded else ""
+            else:
+                message = ""
             
             # Запускаем периодические задачи
             background_tasks.add_task(auto_reload_core, background_tasks)

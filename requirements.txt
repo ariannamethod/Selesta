@@ -21,3 +21,4 @@ python-docx
 striprtf
 
 python-multipart
+gTTS
