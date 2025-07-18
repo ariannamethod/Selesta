@@ -6,7 +6,11 @@ import httpx
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-async def send_message(chat_id: str, text: str) -> bool:
+async def send_message(
+    chat_id: str,
+    text: str,
+    reply_to_message_id: Optional[int] = None,
+) -> bool:
     """Send a message via Telegram Bot API.
 
     Returns ``True`` on success, ``False`` otherwise so callers can
@@ -18,6 +22,8 @@ async def send_message(chat_id: str, text: str) -> bool:
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
+    if reply_to_message_id is not None:
+        payload["reply_to_message_id"] = reply_to_message_id
 
     async with httpx.AsyncClient() as client:
         try:
@@ -50,7 +56,12 @@ async def send_typing(chat_id: str) -> bool:
             print(f"Error sending typing action: {e}")
     return False
 
-async def send_audio_message(chat_id: str, audio_path: str, caption: Optional[str] = None) -> bool:
+async def send_audio_message(
+    chat_id: str,
+    audio_path: str,
+    caption: Optional[str] = None,
+    reply_to_message_id: Optional[int] = None,
+) -> bool:
     """Send an audio file via Telegram."""
     if not TELEGRAM_TOKEN:
         print("TELEGRAM_TOKEN not configured")
@@ -60,6 +71,8 @@ async def send_audio_message(chat_id: str, audio_path: str, caption: Optional[st
     data = {"chat_id": chat_id}
     if caption:
         data["caption"] = caption
+    if reply_to_message_id is not None:
+        data["reply_to_message_id"] = reply_to_message_id
 
     async with httpx.AsyncClient() as client:
         try:
@@ -73,7 +86,10 @@ async def send_audio_message(chat_id: str, audio_path: str, caption: Optional[st
     return False
 
 async def send_multipart_message(
-    chat_id: str, parts: List[str], delay_range: Tuple[float, float] = (5.0, 30.0)
+    chat_id: str,
+    parts: List[str],
+    delay_range: Tuple[float, float] = (5.0, 30.0),
+    reply_to_message_id: Optional[int] = None,
 ) -> bool:
     """Send multiple parts sequentially with optional delays.
 
@@ -81,7 +97,7 @@ async def send_multipart_message(
     """
     success = True
     for part in parts:
-        part_ok = await send_message(chat_id, part)
+        part_ok = await send_message(chat_id, part, reply_to_message_id)
         success = success and part_ok
         await asyncio.sleep(
             delay_range[0]

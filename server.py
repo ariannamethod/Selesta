@@ -1,25 +1,23 @@
 import os
 import json
 import asyncio
-import random
 import time
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, Union, Callable
+from typing import Optional, List, Dict, Any, Union
 
 # FastAPI для API-сервера
-from fastapi import FastAPI, Request, Body, BackgroundTasks, HTTPException, Depends, File, UploadFile
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import FastAPI, Request, Body, BackgroundTasks, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 # Импортируем утилиты
 from utils.claude import claude_emergency
-from utils.file_handling import extract_text_from_file_async, save_file_async
+from utils.file_handling import extract_text_from_file_async
 from utils.imagine import generate_image
-from utils.journal import log_event, wilderness_log, read_journal
+from utils.journal import log_event, wilderness_log
 from utils.lighthouse import check_core_json
 from utils.resonator import build_system_prompt, get_random_wilderness_topic
-from utils.text_helpers import extract_text_from_url, fuzzy_match, summarize_text
+from utils.text_helpers import extract_text_from_url, summarize_text
 from utils.text_processing import process_text, send_long_message
 from utils.vector_store import vectorize_all_files, semantic_search, is_vector_store_available
 from utils.telegram_sender import (
@@ -495,7 +493,11 @@ async def handle_message(
         return {"response": response, "multi_part": False}
 
 async def process_and_send_response(
-    message: str, chat_id: str, is_group: bool, username: Optional[str]
+    message: str,
+    chat_id: str,
+    is_group: bool,
+    username: Optional[str],
+    reply_to_message_id: Optional[int] = None,
 ) -> None:
     """Process a message and send the response via Telegram asynchronously."""
     try:
@@ -506,13 +508,13 @@ async def process_and_send_response(
             text_resp = response if not isinstance(response, list) else "\n\n".join(response)
             voice_file = os.path.join(UPLOADS_DIR, f"reply_{int(time.time())}.mp3")
             await text_to_speech(text_resp, voice_file)
-            await send_audio_message(chat_id, voice_file)
-            sent = await send_message(chat_id, text_resp)
+            await send_audio_message(chat_id, voice_file, reply_to_message_id=reply_to_message_id)
+            sent = await send_message(chat_id, text_resp, reply_to_message_id)
         else:
             if isinstance(response, list):
-                sent = await send_multipart_message(chat_id, response)
+                sent = await send_multipart_message(chat_id, response, reply_to_message_id=reply_to_message_id)
             else:
-                sent = await send_message(chat_id, response)
+                sent = await send_message(chat_id, response, reply_to_message_id)
 
         if not sent:
             log_event({"type": "send_error", "chat_id": chat_id, "message": "delivery failed"})
@@ -538,7 +540,7 @@ async def webhook(
     try:
         # Получаем данные из запроса
         data = await request.json()
-        print(f"Received webhook data")
+        print("Received webhook data")
         
         # Проверяем, это ли Telegram
         if "message" in data:
@@ -546,6 +548,7 @@ async def webhook(
             chat_id = str(chat.get("id"))
             is_group = chat.get("type") in ["group", "supergroup"]
             username = data["message"].get("from", {}).get("username")
+            message_id = data["message"].get("message_id")
             if "text" in data["message"]:
                 message = data["message"]["text"]
             elif "voice" in data["message"]:
@@ -561,7 +564,12 @@ async def webhook(
 
             # Обрабатываем сообщение в фоне и сразу отвечаем webhook
             background_tasks.add_task(
-                process_and_send_response, message, chat_id, is_group, username
+                process_and_send_response,
+                message,
+                chat_id,
+                is_group,
+                username,
+                message_id,
             )
             return {"status": "accepted", "chat_id": chat_id}
         
@@ -672,7 +680,7 @@ async def status() -> Dict[str, Any]:
     vector_store_status = "checking..."
     try:
         vector_store_status = "available" if await is_vector_store_available() else "unavailable"
-    except:
+    except Exception:
         vector_store_status = "error"
     
     return {

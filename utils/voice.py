@@ -1,10 +1,7 @@
 import os
-import asyncio
 from typing import Optional
 
 import httpx
-from gtts import gTTS
-from pydub import AudioSegment
 import openai
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -51,13 +48,20 @@ async def transcribe_audio(file_path: str) -> str:
         return ""
 
 async def text_to_speech(text: str, output_path: str) -> str:
-    """Convert text to speech and save to ``output_path``."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _sync_tts, text, output_path)
-    return output_path
+    """Convert text to speech and save to ``output_path`` using OpenAI TTS."""
+    if not OPENAI_API_KEY:
+        print("OPENAI_API_KEY not configured")
+        return ""
 
-def _sync_tts(text: str, output_path: str) -> None:
-    tts = gTTS(text)
-    tts.save(output_path)
-    # ensure it is valid mp3
-    AudioSegment.from_file(output_path).export(output_path, format="mp3")
+    try:
+        client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
+        resp = await client.audio.speech.with_streaming_response.create(
+            model="tts-1",
+            voice="alloy",
+            input=text,
+        )
+        await resp.stream_to_file(output_path)
+        return output_path
+    except Exception as e:
+        print(f"TTS error: {e}")
+        return ""
