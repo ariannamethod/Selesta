@@ -1,7 +1,7 @@
 import os
 import asyncio
 import random
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import httpx
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -32,8 +32,48 @@ async def send_message(chat_id: str, text: str) -> bool:
             print(f"Error sending Telegram message: {e}")
     return False
 
+async def send_typing(chat_id: str) -> bool:
+    """Send a 'typing' action to indicate response preparation."""
+    if not TELEGRAM_TOKEN:
+        print("TELEGRAM_TOKEN not configured")
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction"
+    payload = {"chat_id": chat_id, "action": "typing"}
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            return True
+        except Exception as e:
+            print(f"Error sending typing action: {e}")
+    return False
+
+async def send_audio_message(chat_id: str, audio_path: str, caption: Optional[str] = None) -> bool:
+    """Send an audio file via Telegram."""
+    if not TELEGRAM_TOKEN:
+        print("TELEGRAM_TOKEN not configured")
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendAudio"
+    data = {"chat_id": chat_id}
+    if caption:
+        data["caption"] = caption
+
+    async with httpx.AsyncClient() as client:
+        try:
+            with open(audio_path, "rb") as af:
+                files = {"audio": af}
+                response = await client.post(url, data=data, files=files)
+                response.raise_for_status()
+                return True
+        except Exception as e:
+            print(f"Error sending audio message: {e}")
+    return False
+
 async def send_multipart_message(
-    chat_id: str, parts: List[str], delay_range: Tuple[float, float] = (1.0, 2.0)
+    chat_id: str, parts: List[str], delay_range: Tuple[float, float] = (5.0, 30.0)
 ) -> bool:
     """Send multiple parts sequentially with optional delays.
 
