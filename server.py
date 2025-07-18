@@ -22,7 +22,8 @@ from utils.resonator import build_system_prompt, get_random_wilderness_topic
 from utils.text_helpers import extract_text_from_url, fuzzy_match, summarize_text
 from utils.text_processing import process_text, send_long_message
 from utils.vector_store import vectorize_all_files, semantic_search, is_vector_store_available
-from utils.telegram_sender import send_message, send_multipart_message
+from utils.telegram_sender import send_message, send_multipart_message, send_voice
+from utils.tts import generate_speech_async
 
 # Получаем ключи API из переменных окружения
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -42,11 +43,13 @@ MAX_RESPONSE_LENGTH = 4096  # Максимальная длина одного �
 UPLOADS_DIR = "uploads"
 DATA_DIR = "data"
 CONFIG_DIR = "config"
+VOICE_DIR = os.path.join(UPLOADS_DIR, "voice")
 
 # Создаем директории, если их нет
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CONFIG_DIR, exist_ok=True)
+os.makedirs(VOICE_DIR, exist_ok=True)
 
 # Создаем FastAPI приложение
 app = FastAPI(title="Selesta Assistant", version=VERSION)
@@ -448,6 +451,7 @@ async def handle_message(
     chat_id = request.get("chat_id")
     is_group = request.get("is_group", False)
     username = request.get("username")
+    voice_reply = request.get("voice_reply", False)
     
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
@@ -457,7 +461,13 @@ async def handle_message(
     
     # Обрабатываем сообщение
     response = await process_message(message, chat_id, is_group, username)
-    
+
+    if voice_reply:
+        text = " ".join(response) if isinstance(response, list) else response
+        file_path = os.path.join(VOICE_DIR, f"{int(time.time())}.mp3")
+        if await generate_speech_async(text, file_path):
+            return {"response": text, "voice": file_path, "multi_part": False}
+
     # Проверяем формат ответа
     if isinstance(response, list):
         return {"response_parts": response, "multi_part": True}
@@ -465,15 +475,33 @@ async def handle_message(
         return {"response": response, "multi_part": False}
 
 async def process_and_send_response(
-    message: str, chat_id: str, is_group: bool, username: Optional[str]
+    message: str,
+    chat_id: str,
+    is_group: bool,
+    username: Optional[str],
+    as_voice: bool = False,
 ) -> None:
     """Process a message and send the response via Telegram asynchronously."""
     try:
         response = await process_message(message, chat_id, is_group, username)
 
         if isinstance(response, list):
-            await send_multipart_message(chat_id, response)
+            if as_voice:
+                text = " ".join(response)
+                file_path = os.path.join(
+                    VOICE_DIR, f"{int(time.time())}_{chat_id}.mp3"
+                )
+                if await generate_speech_async(text, file_path):
+                    await send_voice(chat_id, file_path)
+            else:
+                await send_multipart_message(chat_id, response)
         else:
+            if as_voice:
+                file_path = os.path.join(
+                    VOICE_DIR, f"{int(time.time())}_{chat_id}.mp3"
+                )
+                if await generate_speech_async(response, file_path):
+                    await send_voice(chat_id, file_path)
             await send_message(chat_id, response)
     except Exception as e:
         print(f"Error in process_and_send_response: {e}")
@@ -506,13 +534,22 @@ async def webhook(
             chat_id = str(data["message"]["chat"]["id"])
             is_group = data["message"]["chat"]["type"] in ["group", "supergroup"]
             username = data["message"].get("from", {}).get("username")
+            voice_reply = False
+            if message.startswith("/voice"):
+                voice_reply = True
+                message = message[6:].strip()
             
             # Запускаем периодические задачи
             background_tasks.add_task(auto_reload_core, background_tasks)
 
             # Обрабатываем сообщение в фоне и сразу отвечаем webhook
             background_tasks.add_task(
-                process_and_send_response, message, chat_id, is_group, username
+                process_and_send_response,
+                message,
+                chat_id,
+                is_group,
+                username,
+                voice_reply,
             )
             return {"status": "accepted", "chat_id": chat_id}
         
