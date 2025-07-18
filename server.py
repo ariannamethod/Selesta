@@ -472,9 +472,12 @@ async def process_and_send_response(
         response = await process_message(message, chat_id, is_group, username)
 
         if isinstance(response, list):
-            await send_multipart_message(chat_id, response)
+            sent = await send_multipart_message(chat_id, response)
         else:
-            await send_message(chat_id, response)
+            sent = await send_message(chat_id, response)
+
+        if not sent:
+            log_event({"type": "send_error", "chat_id": chat_id, "message": "delivery failed"})
     except Exception as e:
         print(f"Error in process_and_send_response: {e}")
         log_event({"type": "send_error", "error": str(e), "chat_id": chat_id})
