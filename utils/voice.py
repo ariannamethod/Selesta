@@ -40,9 +40,13 @@ async def transcribe_audio(file_path: str) -> str:
         print("OPENAI_API_KEY not configured")
         return ""
     try:
-        audio_file = open(file_path, "rb")
-        transcript = await openai.Audio.atranscribe("whisper-1", audio_file)
-        return transcript.get("text", "")
+        client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
+        with open(file_path, "rb") as audio_file:
+            resp = await client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+            )
+        return getattr(resp, "text", "")
     except Exception as e:
         print(f"Whisper transcription error: {e}")
         return ""

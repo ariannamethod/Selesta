@@ -247,10 +247,11 @@ def format_wilderness_topics(topics: List[str]) -> str:
     return "\n".join(f"- {topic}" for topic in topics)
 
 def build_system_prompt(
-    chat_id: Optional[str] = None, 
+    chat_id: Optional[str] = None,
     is_group: bool = False,
     message_context: Optional[str] = None,
-    max_tokens: Optional[int] = None
+    max_tokens: Optional[int] = None,
+    language: Optional[str] = None
 ) -> str:
     """
     Создает системный промпт на основе параметров и конфигурации.
@@ -260,6 +261,7 @@ def build_system_prompt(
         is_group: Является ли чат групповым
         message_context: Контекст сообщения
         max_tokens: Максимальное количество токенов
+        language: Предпочтительный язык ответа (например, "Russian")
         
     Returns:
         str: Сформированный системный промпт
@@ -297,6 +299,9 @@ def build_system_prompt(
         f"{ethics}\n\n"
         f"{wilderness_prompt}"
     )
+
+    if language:
+        total_prompt += f"\n\nRespond in {language}."
     
     # Проверяем длину и при необходимости обрезаем
     enc = tiktoken.get_encoding("cl100k_base")

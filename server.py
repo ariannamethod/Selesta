@@ -28,6 +28,7 @@ from utils.telegram_sender import (
     send_audio_message,
 )
 from utils.voice import download_telegram_file, transcribe_audio, text_to_speech
+from langdetect import detect, LangDetectException
 
 # Получаем ключи API из переменных окружения
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -272,6 +273,21 @@ async def process_message(
             voice_mode[chat_id] = False
             return "🔇"  # Muted speaker emoji indicates voice mode is off
 
+        language = None
+        try:
+            lang_code = detect(message) if message.strip() else ""
+            LANG_MAP = {
+                "ru": "Russian",
+                "en": "English",
+                "uk": "Ukrainian",
+                "de": "German",
+                "fr": "French",
+                "es": "Spanish",
+            }
+            language = LANG_MAP.get(lang_code, "English")
+        except LangDetectException:
+            language = None
+
         # Проверка на триггеры для создания изображения
         if any(trigger in message.lower() for trigger in TRIGGER_WORDS) or message.startswith("/draw"):
             # Очищаем запрос от триггера
@@ -305,9 +321,10 @@ async def process_message(
         
         # Создаем системный промпт с учетом контекста сообщения
         system_prompt = build_system_prompt(
-            chat_id=chat_id, 
+            chat_id=chat_id,
             is_group=is_group,
-            message_context=message
+            message_context=message,
+            language=language,
         )
         
         # Получаем контекст из памяти
@@ -437,6 +454,20 @@ async def check_wilderness(background_tasks: BackgroundTasks) -> None:
     
     # Wilderness completed, further checks will be triggered by other requests
 
+# Periodic background loop for configuration and wilderness checks
+check_task_started = False
+
+async def periodic_checks_loop() -> None:
+    """Runs core and wilderness checks periodically without duplicating tasks."""
+    global check_task_started
+    if check_task_started:
+        return
+    check_task_started = True
+    while True:
+        background = BackgroundTasks()
+        await auto_reload_core(background)
+        await asyncio.sleep(CHECK_INTERVAL)
+
 # Роуты
 @app.on_event("startup")
 async def startup_event():
@@ -449,6 +480,7 @@ async def startup_event():
     last_wilderness = time.time()
     # Запускаем векторизацию в фоне, чтобы не блокировать запуск
     asyncio.create_task(startup_vectorization())
+    asyncio.create_task(periodic_checks_loop())
 
 @app.get("/")
 async def root():
@@ -483,8 +515,6 @@ async def handle_message(
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
     
-    # Запускаем периодические задачи
-    background_tasks.add_task(auto_reload_core, background_tasks)
     
     # Обрабатываем сообщение
     response = await process_message(message, chat_id, is_group, username)
@@ -566,9 +596,6 @@ async def webhook(
             else:
                 message = ""
             
-            # Запускаем периодические задачи
-            background_tasks.add_task(auto_reload_core, background_tasks)
-
             # Обрабатываем сообщение в фоне и сразу отвечаем webhook
             background_tasks.add_task(
                 process_and_send_response,
@@ -613,9 +640,6 @@ async def upload_file(
         with open(file_path, "wb") as f:
             f.write(contents)
         
-        # Запускаем периодические задачи
-        background_tasks.add_task(auto_reload_core, background_tasks)
-        
         log_event({"type": "file_uploaded", "filename": safe_filename, "size": len(contents)})
         
         return {
@@ -648,9 +672,6 @@ async def handle_file(
     
     if not file_path or not os.path.exists(file_path):
         raise HTTPException(status_code=400, detail="Valid file_path is required")
-    
-    # Запускаем периодические задачи
-    background_tasks.add_task(auto_reload_core, background_tasks)
     
     # Обрабатываем файл
     content = await process_file(file_path)
@@ -722,9 +743,6 @@ async def trigger_wilderness(
     # Запускаем wilderness excursion
     reflection = await wilderness_excursion()
     last_wilderness = time.time()
-    
-    # Запускаем периодические задачи
-    background_tasks.add_task(auto_reload_core, background_tasks)
     
     if reflection:
         return {
