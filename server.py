@@ -18,7 +18,7 @@ from utils.imagine import generate_image
 from utils.journal import log_event, wilderness_log
 from utils.lighthouse import check_core_json
 from utils.resonator import build_system_prompt, get_random_wilderness_topic
-from utils.text_helpers import extract_text_from_url, summarize_text
+from utils.text_helpers import extract_text_from_url_async, summarize_text
 from utils.text_processing import process_text, send_long_message
 from utils.limit_paragraphs import limit_paragraphs
 from utils.vector_store import vectorize_all_files, semantic_search, is_vector_store_available
@@ -336,12 +336,15 @@ async def process_message(
             urls = [w for w in words if w.startswith("http://") or w.startswith("https://")]
             if urls:
                 url = urls[0]
-                # Извлекаем текст со страницы
-                text = extract_text_from_url(url)
-                # Суммаризируем текст для удобочитаемости
-                text = summarize_text(text, 1500)
-                # Добавляем контекст URL к исходному сообщению
-                message += f"\n\nContext from {url}:\n{text}"
+                try:
+                    # Извлекаем текст со страницы
+                    text = await extract_text_from_url_async(url)
+                    # Суммаризируем текст для удобочитаемости
+                    text = summarize_text(text, 1500)
+                    # Добавляем контекст URL к исходному сообщению
+                    message += f"\n\nContext from {url}:\n{text}"
+                except Exception as e:
+                    message += f"\n\n[Failed to retrieve context from {url}: {e}]"
         
         # Создаем системный промпт с учетом контекста сообщения
         system_prompt = build_system_prompt(
