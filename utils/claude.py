@@ -4,6 +4,10 @@ import httpx
 import asyncio
 from typing import Optional, Dict, Any, List, Union
 
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 # Константы для работы с Claude
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 # По умолчанию используем стабильную модель Claude 3
@@ -76,7 +80,11 @@ async def claude_emergency(
             except httpx.HTTPStatusError as e:
                 # Если произошла ошибка с основной моделью, пробуем резервную
                 if response.status_code in (400, 404, 429, 500, 502, 503):
-                    print(f"Claude error ({response.status_code}), falling back to {CLAUDE_MODEL_FALLBACK}")
+                    logger.warning(
+                        "Claude error (%s), falling back to %s",
+                        response.status_code,
+                        CLAUDE_MODEL_FALLBACK,
+                    )
                     data["model"] = CLAUDE_MODEL_FALLBACK
                     response = await client.post(
                         "https://api.anthropic.com/v1/messages",
@@ -103,7 +111,7 @@ async def claude_emergency(
         return quiet_marker + "[No content in Claude response.]"
     except Exception as e:
         error_msg = f"[Claude error: {str(e)}]"
-        print(error_msg)
+        logger.exception("Claude error")
         return quiet_marker + error_msg
 
 async def claude_completion(
@@ -158,7 +166,11 @@ async def claude_completion(
             except httpx.HTTPStatusError as e:
                 # Если произошла ошибка с основной моделью, пробуем резервную
                 if response.status_code in (400, 404, 429, 500, 502, 503):
-                    print(f"Claude error ({response.status_code}), falling back to {CLAUDE_MODEL_FALLBACK}")
+                    logger.warning(
+                        "Claude error (%s), falling back to %s",
+                        response.status_code,
+                        CLAUDE_MODEL_FALLBACK,
+                    )
                     data["model"] = CLAUDE_MODEL_FALLBACK
                     response = await client.post(
                         "https://api.anthropic.com/v1/messages",
@@ -172,5 +184,5 @@ async def claude_completion(
             return response.json()
     except Exception as e:
         error_msg = f"Claude error: {str(e)}"
-        print(error_msg)
+        logger.exception("Claude error")
         return {"error": error_msg}

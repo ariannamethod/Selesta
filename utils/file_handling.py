@@ -8,6 +8,10 @@ from bs4 import BeautifulSoup
 import csv
 import json
 
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 # Увеличил максимальный размер, так как современные модели могут обрабатывать больше текста
 MAX_TEXT_SIZE = 150_000  # Maximum number of characters for a single file
 
@@ -31,7 +35,7 @@ def extract_text_from_pdf(path: str) -> str:
             return text[:MAX_TEXT_SIZE] + ('\n[Truncated]' if len(text) > MAX_TEXT_SIZE else '')
         return "[PDF is empty or unreadable.]"
     except Exception as e:
-        print(f"Error reading PDF ({os.path.basename(path)}): {e}")
+        logger.exception("Error reading PDF (%s)", os.path.basename(path))
         return f"[Error reading PDF ({os.path.basename(path)}): {e}]"
 
 def extract_text_from_docx(path: str) -> str:
@@ -53,7 +57,7 @@ def extract_text_from_docx(path: str) -> str:
         text = "\n".join(paragraphs).strip()
         return text[:MAX_TEXT_SIZE] + ('\n[Truncated]' if len(text) > MAX_TEXT_SIZE else '')
     except Exception as e:
-        print(f"Error reading DOCX ({os.path.basename(path)}): {e}")
+        logger.exception("Error reading DOCX (%s)", os.path.basename(path))
         return f"[Error reading DOCX ({os.path.basename(path)}): {e}]"
 
 def extract_text_from_txt(path: str) -> str:
@@ -68,7 +72,7 @@ def extract_text_from_txt(path: str) -> str:
         except UnicodeDecodeError:
             continue
         except Exception as e:
-            print(f"Error reading TXT ({os.path.basename(path)}): {e}")
+            logger.exception("Error reading TXT (%s)", os.path.basename(path))
             return f"[Error reading TXT ({os.path.basename(path)}): {e}]"
     
     return f"[Error: Unable to decode file ({os.path.basename(path)}) with available encodings]"
@@ -81,7 +85,7 @@ def extract_text_from_rtf(path: str) -> str:
             text = rtf_to_text(content)
         return text[:MAX_TEXT_SIZE] + ('\n[Truncated]' if len(text) > MAX_TEXT_SIZE else '')
     except Exception as e:
-        print(f"Error reading RTF ({os.path.basename(path)}): {e}")
+        logger.exception("Error reading RTF (%s)", os.path.basename(path))
         return f"[Error reading RTF ({os.path.basename(path)}): {e}]"
 
 def extract_text_from_odt(path: str) -> str:
@@ -99,11 +103,11 @@ def extract_text_from_odt(path: str) -> str:
                 import textract
                 text = textract.process(path).decode("utf-8")
             except Exception as e:
-                print(f"Error reading ODT ({os.path.basename(path)}): {e}")
+                logger.exception("Error reading ODT (%s)", os.path.basename(path))
                 return f"[Error reading ODT ({os.path.basename(path)}): {e}]"
         return text[:MAX_TEXT_SIZE] + ('\n[Truncated]' if len(text) > MAX_TEXT_SIZE else '')
     except Exception as e:
-        print(f"Error reading ODT ({os.path.basename(path)}): {e}")
+        logger.exception("Error reading ODT (%s)", os.path.basename(path))
         return f"[Error reading ODT ({os.path.basename(path)}): {e}]"
 
 def extract_text_from_html(path: str) -> str:
@@ -121,7 +125,7 @@ def extract_text_from_html(path: str) -> str:
         text = text.strip()
         return text[:MAX_TEXT_SIZE] + ('\n[Truncated]' if len(text) > MAX_TEXT_SIZE else '')
     except Exception as e:
-        print(f"Error reading HTML ({os.path.basename(path)}): {e}")
+        logger.exception("Error reading HTML (%s)", os.path.basename(path))
         return f"[Error reading HTML ({os.path.basename(path)}): {e}]"
 
 def extract_text_from_csv(path: str) -> str:
@@ -148,7 +152,7 @@ def extract_text_from_csv(path: str) -> str:
         text = "\n".join(result).strip()
         return text[:MAX_TEXT_SIZE] + ('\n[Truncated]' if len(text) > MAX_TEXT_SIZE else '')
     except Exception as e:
-        print(f"Error reading CSV ({os.path.basename(path)}): {e}")
+        logger.exception("Error reading CSV (%s)", os.path.basename(path))
         return f"[Error reading CSV ({os.path.basename(path)}): {e}]"
 
 def extract_text_from_json(path: str) -> str:
@@ -159,7 +163,7 @@ def extract_text_from_json(path: str) -> str:
         text = json.dumps(data, indent=2, ensure_ascii=False)
         return text[:MAX_TEXT_SIZE] + ('\n[Truncated]' if len(text) > MAX_TEXT_SIZE else '')
     except Exception as e:
-        print(f"Error reading JSON ({os.path.basename(path)}): {e}")
+        logger.exception("Error reading JSON (%s)", os.path.basename(path))
         return f"[Error reading JSON ({os.path.basename(path)}): {e}]"
 
 def extract_text_from_code(path: str) -> str:
@@ -182,7 +186,7 @@ def extract_text_from_doc(path: str) -> str:
     except ImportError:
         return f"[Error: textract module not available for reading DOC files]"
     except Exception as e:
-        print(f"Error reading DOC ({os.path.basename(path)}): {e}")
+        logger.exception("Error reading DOC (%s)", os.path.basename(path))
         return f"[Error reading DOC ({os.path.basename(path)}): {e}]"
 
 def extract_text_from_file(path: str) -> str:
@@ -243,7 +247,7 @@ async def save_file_async(file_path: str, content: str) -> bool:
         
         return True
     except Exception as e:
-        print(f"Error saving file: {e}")
+        logger.exception("Error saving file")
         return False
 
 def _save_file(file_path: str, content: str) -> None:
@@ -267,5 +271,5 @@ async def list_files_async(directory: str, pattern: Optional[str] = None) -> Lis
         # Возвращаем полные пути к файлам
         return [os.path.join(directory, f) for f in files]
     except Exception as e:
-        print(f"Error listing files: {e}")
+        logger.exception("Error listing files")
         return []

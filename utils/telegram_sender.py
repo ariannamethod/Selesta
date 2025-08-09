@@ -4,6 +4,10 @@ import random
 from typing import List, Tuple, Optional
 import httpx
 
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 async def send_message(
@@ -17,7 +21,7 @@ async def send_message(
     react to delivery failures.
     """
     if not TELEGRAM_TOKEN:
-        print("TELEGRAM_TOKEN not configured")
+        logger.warning("TELEGRAM_TOKEN not configured")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -31,17 +35,19 @@ async def send_message(
             response.raise_for_status()
             return True
         except httpx.HTTPStatusError as e:
-            print(
-                f"Telegram API error {e.response.status_code}: {e.response.text}"
+            logger.error(
+                "Telegram API error %s: %s",
+                e.response.status_code,
+                e.response.text,
             )
         except Exception as e:
-            print(f"Error sending Telegram message: {e}")
+            logger.exception("Error sending Telegram message")
     return False
 
 async def send_typing(chat_id: str) -> bool:
     """Send a 'typing' action to indicate response preparation."""
     if not TELEGRAM_TOKEN:
-        print("TELEGRAM_TOKEN not configured")
+        logger.warning("TELEGRAM_TOKEN not configured")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction"
@@ -53,7 +59,7 @@ async def send_typing(chat_id: str) -> bool:
             response.raise_for_status()
             return True
         except Exception as e:
-            print(f"Error sending typing action: {e}")
+            logger.exception("Error sending typing action")
     return False
 
 async def send_audio_message(
@@ -64,7 +70,7 @@ async def send_audio_message(
 ) -> bool:
     """Send an audio file via Telegram."""
     if not TELEGRAM_TOKEN:
-        print("TELEGRAM_TOKEN not configured")
+        logger.warning("TELEGRAM_TOKEN not configured")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendAudio"
@@ -82,7 +88,7 @@ async def send_audio_message(
                 response.raise_for_status()
                 return True
         except Exception as e:
-            print(f"Error sending audio message: {e}")
+            logger.exception("Error sending audio message")
     return False
 
 async def send_multipart_message(

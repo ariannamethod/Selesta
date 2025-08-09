@@ -5,6 +5,10 @@ import time
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Union
 
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 # Пути к журналам
 LOG_PATH = "data/journal.json"
 WILDERNESS_PATH = "data/wilderness.md"
@@ -65,7 +69,7 @@ def log_event(event: Dict[str, Any]) -> bool:
         return True
     except Exception as e:
         # Логируем ошибку в консоль, но не возбуждаем исключение
-        print(f"Error writing to journal: {e}")
+        logger.exception("Error writing to journal")
         return False
 
 def wilderness_log(fragment: str) -> bool:
@@ -84,7 +88,7 @@ def wilderness_log(fragment: str) -> bool:
             f.write(fragment.strip() + "\n\n")
         return True
     except Exception as e:
-        print(f"Error writing to wilderness log: {e}")
+        logger.exception("Error writing to wilderness log")
         return False
 
 def archive_logs(entries: List[Dict[str, Any]]) -> bool:
@@ -111,7 +115,7 @@ def archive_logs(entries: List[Dict[str, Any]]) -> bool:
         
         return True
     except Exception as e:
-        print(f"Error archiving logs: {e}")
+        logger.exception("Error archiving logs")
         return False
 
 def read_journal(limit: int = 100) -> List[Dict[str, Any]]:
@@ -137,7 +141,7 @@ def read_journal(limit: int = 100) -> List[Dict[str, Any]]:
             except json.JSONDecodeError:
                 return []
     except Exception as e:
-        print(f"Error reading journal: {e}")
+        logger.exception("Error reading journal")
         return []
 
 def read_wilderness(limit_paragraphs: Optional[int] = None) -> str:
@@ -163,7 +167,7 @@ def read_wilderness(limit_paragraphs: Optional[int] = None) -> str:
         
         return content
     except Exception as e:
-        print(f"Error reading wilderness log: {e}")
+        logger.exception("Error reading wilderness log")
         return ""
 
 async def log_event_async(event: Dict[str, Any]) -> bool:

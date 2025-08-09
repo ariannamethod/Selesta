@@ -5,6 +5,10 @@ import random
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple, Union
 
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 # Базовые константы
 MAX_TOKENS_DEFAULT = 27000
 DEFAULT_MODEL = "gpt-4-turbo"
@@ -187,7 +191,7 @@ def load_config() -> Dict[str, Any]:
                 json.dump(default_config, f, indent=2, ensure_ascii=False)
             return default_config
     except Exception as e:
-        print(f"Error loading resonator config: {e}")
+        logger.exception("Error loading resonator config")
         return default_config
 
 def select_interaction_style(user_id: Optional[str] = None, message_context: Optional[str] = None) -> str:
@@ -326,10 +330,10 @@ def build_system_prompt(
     
     global _prompt_logged
     if not _prompt_logged:
-        print("=== SELESTA SYSTEM PROMPT LOADED ===")
-        print(f"Style: {style}")
-        print(f"Token count: {sys_tokens} / {max_tokens_limit//2}")
-        print(total_prompt[:800] + "...")
+        logger.info("=== SELESTA SYSTEM PROMPT LOADED ===")
+        logger.info("Style: %s", style)
+        logger.info("Token count: %d / %d", sys_tokens, max_tokens_limit//2)
+        logger.info("%s...", total_prompt[:800])
         _prompt_logged = True
     
     return total_prompt
@@ -371,7 +375,7 @@ def update_config(new_config: Dict[str, Any]) -> bool:
         
         return True
     except Exception as e:
-        print(f"Error updating resonator config: {e}")
+        logger.exception("Error updating resonator config")
         return False
 
 def add_wilderness_topic(topic: str) -> bool:
@@ -387,12 +391,12 @@ def add_wilderness_topic(topic: str) -> bool:
     try:
         config = load_config()
         topics = config.get("wilderness_topics", WILDERNESS_TOPICS)
-        
+
         # Проверяем, что такой темы еще нет
         if topic not in topics:
             topics.append(topic)
             return update_config({"wilderness_topics": topics})
         return True
     except Exception as e:
-        print(f"Error adding wilderness topic: {e}")
+        logger.exception("Error adding wilderness topic")
         return False

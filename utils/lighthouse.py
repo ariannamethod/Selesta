@@ -6,6 +6,10 @@ import asyncio
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 # Константы
 DEFAULT_CORE_URL = "http://selesta.ariannamethod.me/core.json"
 LOCAL_CACHE_PATH = "data/core_cache.json"
@@ -48,7 +52,7 @@ async def check_core_json(
     if use_cache and not force_refresh:
         cached_config = await load_cached_core()
         if cached_config and not is_cache_expired():
-            print(f"Using cached core configuration (last updated: {get_cache_timestamp()})")
+            logger.info("Using cached core configuration (last updated: %s)", get_cache_timestamp())
             return cached_config
     
     # Пробуем получить конфигурацию с удаленного сервера
@@ -57,16 +61,16 @@ async def check_core_json(
     if config:
         # Обновляем кэш если получили конфигурацию
         await save_cached_core(config)
-        print(LIGHTHOUSE_MESSAGE.format(core_url=core_url))
+        logger.info(LIGHTHOUSE_MESSAGE.format(core_url=core_url))
         return config
     elif use_cache:
         # Используем кэш если запрос не удался
         cached_config = await load_cached_core()
         if cached_config:
-            print("Lighthouse: Using cached configuration (remote unreachable)")
+            logger.warning("Lighthouse: Using cached configuration (remote unreachable)")
             return cached_config
     
-    print("Lighthouse: Could not reach the core config and no valid cache available.")
+    logger.error("Lighthouse: Could not reach the core config and no valid cache available.")
     return None
 
 async def fetch_core_config(core_url: str) -> Optional[Dict[str, Any]]:
@@ -86,19 +90,19 @@ async def fetch_core_config(core_url: str) -> Optional[Dict[str, Any]]:
                 if resp.status_code == 200:
                     return resp.json()
                 else:
-                    print(f"Lighthouse: HTTP error {resp.status_code} when fetching core config.")
+                    logger.error("Lighthouse: HTTP error %s when fetching core config.", resp.status_code)
             
             # Если не последняя попытка, ждем и пробуем снова
             if attempt < MAX_RETRIES - 1:
                 await asyncio.sleep(RETRY_DELAY)
                 
         except httpx.HTTPError as e:
-            print(f"Lighthouse HTTP error: {e}")
+            logger.exception("Lighthouse HTTP error")
             if attempt < MAX_RETRIES - 1:
                 await asyncio.sleep(RETRY_DELAY)
                 
         except Exception as e:
-            print(f"Lighthouse error: {e}")
+            logger.exception("Lighthouse error")
             if attempt < MAX_RETRIES - 1:
                 await asyncio.sleep(RETRY_DELAY)
     
@@ -131,7 +135,7 @@ async def save_cached_core(config: Dict[str, Any]) -> bool:
         
         return True
     except Exception as e:
-        print(f"Error saving core cache: {e}")
+        logger.exception("Error saving core cache")
         return False
 
 async def load_cached_core() -> Optional[Dict[str, Any]]:
@@ -151,7 +155,7 @@ async def load_cached_core() -> Optional[Dict[str, Any]]:
         # Возвращаем только саму конфигурацию
         return cache_data.get("config")
     except Exception as e:
-        print(f"Error loading core cache: {e}")
+        logger.exception("Error loading core cache")
         return None
 
 def is_cache_expired() -> bool:

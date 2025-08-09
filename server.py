@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 # Импортируем утилиты
+from utils.logger import get_logger
 from utils.claude import claude_emergency
 from utils.file_handling import extract_text_from_file_async
 from utils.imagine import generate_image_async
@@ -30,6 +31,8 @@ from utils.telegram_sender import (
 )
 from utils.voice import download_telegram_file, transcribe_audio, text_to_speech
 from langdetect import detect, LangDetectException
+
+logger = get_logger(__name__)
 
 # Получаем ключи API из переменных окружения
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -109,7 +112,7 @@ async def startup_vectorization() -> None:
                 ts = _lock.read().strip()
             last_time = datetime.fromisoformat(ts)
             if (datetime.utcnow() - last_time).total_seconds() < VECTOR_LOCK_TTL:
-                print("Vectorization recently performed, skipping.")
+                logger.info("Vectorization recently performed, skipping.")
                 vectorization_done = True
                 return
         except Exception:
@@ -120,12 +123,13 @@ async def startup_vectorization() -> None:
             result = await vectorize_all_files(
                 openai_api_key=OPENAI_API_KEY,
                 force=False,
-                on_message=lambda msg: print(f"Vectorization: {msg}"),
+                on_message=lambda msg: logger.info("Vectorization: %s", msg),
                 path_patterns=[f"{CONFIG_DIR}/*.md", f"{CONFIG_DIR}/*.txt", f"{CONFIG_DIR}/*.json"]
             )
-            print(
-                f"Vectorization complete: {len(result['upserted'])} chunks upserted, "
-                f"{len(result['deleted'])} chunks deleted"
+            logger.info(
+                "Vectorization complete: %d chunks upserted, %d chunks deleted",
+                len(result['upserted']),
+                len(result['deleted']),
             )
             # Создаем файл-замок после успешной векторизации
             try:
@@ -134,9 +138,9 @@ async def startup_vectorization() -> None:
             except Exception:
                 pass
         else:
-            print("Vector store unavailable, skipping vectorization.")
+            logger.warning("Vector store unavailable, skipping vectorization.")
     except Exception as v_error:
-        print(f"Vectorization error: {v_error}")
+        logger.exception("Vectorization error")
     finally:
         vectorization_done = True
 
@@ -146,23 +150,23 @@ async def initialize_config() -> Dict[str, Any]:
         # Проверка core.json через "маяк"
         core_config = await check_core_json()
         if not core_config:
-            print("Failed to load core config, using local config.")
+            logger.warning("Failed to load core config, using local config.")
             try:
                 with open(f"{CONFIG_DIR}/core.json", "r", encoding="utf-8") as f:
                     core_config = json.load(f)
             except Exception as e:
-                print(f"Error loading local config: {e}")
+                logger.exception("Error loading local config")
                 core_config = {"agent_name": AGENT_NAME, "version": VERSION}
         
         # Векторизация будет запущена отдельно после старта приложения
         if not OPENAI_API_KEY:
-            print("Warning: OpenAI API key not set, skipping vectorization.")
+            logger.warning("OpenAI API key not set, skipping vectorization.")
         
-        print(f"{AGENT_NAME} v{VERSION} initialized successfully.")
+        logger.info("%s v%s initialized successfully.", AGENT_NAME, VERSION)
         log_event({"type": "init", "status": "success", "version": VERSION})
         return core_config
     except Exception as e:
-        print(f"Error during initialization: {e}")
+        logger.exception("Error during initialization")
         log_event({"type": "init", "status": "error", "error": str(e)})
         return {"agent_name": AGENT_NAME, "version": VERSION}  # Возвращаем минимальную конфигурацию вместо None
 
@@ -174,7 +178,7 @@ async def wilderness_excursion() -> Optional[str]:
     try:
         # Выбираем случайную тему
         topic = get_random_wilderness_topic()
-        print(f"Starting wilderness excursion on topic: {topic}")
+        logger.info("Starting wilderness excursion on topic: %s", topic)
         
         # Формируем промпт для размышления
         prompt = f"""
@@ -195,11 +199,11 @@ async def wilderness_excursion() -> Optional[str]:
         entry = f"## Wilderness Excursion: {topic}\n\n*{timestamp}*\n\n{reflection}\n\n---\n\n"
         wilderness_log(entry)
         
-        print(f"Completed wilderness excursion: {topic}")
+        logger.info("Completed wilderness excursion: %s", topic)
         log_event({"type": "wilderness", "topic": topic})
         return reflection
     except Exception as e:
-        print(f"Error during wilderness excursion: {e}")
+        logger.exception("Error during wilderness excursion")
         log_event({"type": "wilderness", "status": "error", "error": str(e)})
         return None
 
@@ -365,7 +369,7 @@ async def process_message(
                 if context_chunks:
                     context = "\n\n".join(context_chunks)
         except Exception as search_error:
-            print(f"Semantic search error: {search_error}")
+            logger.exception("Semantic search error")
         
         # Формируем финальный промпт для модели с контекстом
         full_prompt = f"{message}\n\n"
@@ -412,7 +416,7 @@ async def process_message(
         # Возвращаем одно сообщение или список сообщений
         return response_parts if len(response_parts) > 1 else response_parts[0]
     except Exception as e:
-        print(f"Error processing message: {e}")
+        logger.exception("Error processing message")
         log_event({"type": "error", "error": str(e)})
         return "💎"  # Тихий символ ошибки
 
@@ -436,7 +440,7 @@ async def process_file(file_path: str) -> str:
         
         return text
     except Exception as e:
-        print(f"Error processing file: {e}")
+        logger.exception("Error processing file")
         log_event({"type": "error", "error": str(e)})
         return f"[Error processing file: {e}]"
 
@@ -452,11 +456,11 @@ async def auto_reload_core(background_tasks: BackgroundTasks) -> None:
     
     current_time = time.time()
     if current_time - last_check > CHECK_INTERVAL:
-        print("Checking for core configuration updates...")
+        logger.info("Checking for core configuration updates...")
         new_config = await check_core_json()
         if new_config:
             core_config = new_config
-            print("Core configuration updated.")
+            logger.info("Core configuration updated.")
         last_check = current_time
     
     # Запланировать следующую проверку
@@ -475,7 +479,7 @@ async def check_wilderness(background_tasks: BackgroundTasks) -> None:
     hours_since_last = (current_time - last_wilderness) / 3600
     
     if hours_since_last > WILDERNESS_INTERVAL:
-        print("Starting scheduled wilderness excursion...")
+        logger.info("Starting scheduled wilderness excursion...")
         await wilderness_excursion()
         last_wilderness = current_time
     
@@ -501,7 +505,7 @@ async def startup_event():
     """Инициализация при запуске сервера."""
     global core_config, last_check, last_wilderness
 
-    print(f"Starting {AGENT_NAME} Assistant v{VERSION}...")
+    logger.info("Starting %s Assistant v%s...", AGENT_NAME, VERSION)
     core_config = await initialize_config()
     last_check = time.time()
     last_wilderness = time.time()
@@ -616,7 +620,7 @@ async def process_and_send_response(
         if not sent:
             log_event({"type": "send_error", "chat_id": chat_id, "message": "delivery failed"})
     except Exception as e:
-        print(f"Error in process_and_send_response: {e}")
+        logger.exception("Error in process_and_send_response")
         log_event({"type": "send_error", "error": str(e), "chat_id": chat_id})
 
 @app.post("/webhook")
@@ -637,7 +641,7 @@ async def webhook(
     try:
         # Получаем данные из запроса
         data = await request.json()
-        print("Received webhook data")
+        logger.info("Received webhook data")
         
         # Проверяем, это ли Telegram
         if "message" in data:
@@ -677,7 +681,7 @@ async def webhook(
         # Для других источников
         return {"status": "received"}
     except Exception as e:
-        print(f"Error handling webhook: {e}")
+        logger.exception("Error handling webhook")
         log_event({"type": "webhook_error", "error": str(e)})
         return {"status": "error", "error": str(e)}
 
@@ -716,7 +720,7 @@ async def upload_file(
             "content_type": file.content_type
         }
     except Exception as e:
-        print(f"Error uploading file: {e}")
+        logger.exception("Error uploading file")
         log_event({"type": "file_upload_error", "error": str(e)})
         raise HTTPException(status_code=500, detail=str(e))
 
