@@ -3,6 +3,7 @@ import json
 import asyncio
 import time
 import random
+import re
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Union
 
@@ -13,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 # Импортируем утилиты
 from utils.claude import claude_emergency
-from utils.file_handling import extract_text_from_file_async
+from utils.file_handling import extract_text_from_file_async, SUPPORTED_FORMATS
 from utils.imagine import generate_image_async
 from utils.journal import log_event, wilderness_log
 from utils.lighthouse import check_core_json
@@ -45,6 +46,8 @@ WILDERNESS_INTERVAL = 72  # Wilderness excursion каждые 72 часа
 TRIGGER_WORDS = ["нарисуй", "представь", "визуализируй", "изобрази", "draw", "imagine", "visualize"]
 MAX_RESPONSE_LENGTH = 4096  # Максимальная длина одного сообщения
 MAX_PARAGRAPHS = int(os.getenv("MAX_PARAGRAPHS", "3"))
+MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", str(10 * 1024 * 1024)))  # 10 MB
+UploadFile.spool_max_size = MAX_UPLOAD_SIZE
 
 # Имя бота и дополнительные параметры для группового поведения
 BOT_USERNAME = os.getenv("BOT_USERNAME", "").lower()
@@ -697,24 +700,38 @@ async def upload_file(
         Dict[str, str]: Информация о загруженном файле
     """
     try:
-        # Создаем имя файла с временной меткой
+        # Проверяем расширение файла
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in SUPPORTED_FORMATS:
+            raise HTTPException(status_code=400, detail="Unsupported file type")
+
+        # Санитизируем имя файла и добавляем временную метку
+        original_name = os.path.basename(file.filename)
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", original_name)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_filename = f"{timestamp}_{file.filename.replace(' ', '_')}"
+        safe_filename = f"{timestamp}_{safe_name}"
         file_path = os.path.join(UPLOADS_DIR, safe_filename)
-        
-        # Сохраняем файл
-        contents = await file.read()
+
+        total_size = 0
         with open(file_path, "wb") as f:
-            f.write(contents)
-        
-        log_event({"type": "file_uploaded", "filename": safe_filename, "size": len(contents)})
-        
+            while chunk := await file.read(1024 * 1024):
+                total_size += len(chunk)
+                if total_size > MAX_UPLOAD_SIZE:
+                    f.close()
+                    os.remove(file_path)
+                    raise HTTPException(status_code=413, detail="File too large")
+                f.write(chunk)
+
+        log_event({"type": "file_uploaded", "filename": safe_filename, "size": total_size})
+
         return {
             "filename": safe_filename,
             "path": file_path,
-            "size": len(contents),
-            "content_type": file.content_type
+            "size": total_size,
+            "content_type": file.content_type,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error uploading file: {e}")
         log_event({"type": "file_upload_error", "error": str(e)})
