@@ -19,6 +19,20 @@ Interacting with Selesta is an experience in emergent dialogue. She does not see
   in the background, allowing delayed or multi-part replies without hitting
   provider timeouts.
 
+## CORS and allowed domains
+
+Allowed web origins are configured through the `ALLOWED_ORIGINS` environment variable.
+Provide a comma-separated list of domains that may access the API.
+If the variable is unset, the server defaults to `http://localhost` and `http://localhost:3000` for development.
+
+To update the list for staging or production deployments, set the variable accordingly:
+
+```
+ALLOWED_ORIGINS=https://your.domain,https://staging.your.domain
+```
+
+Add the line to your `.env` file for local use or configure it in your hosting environment.
+
 ## What We're Going To Do
 
 - **Expand Memory:** Integrate deeper memory layers and long-term context spanning across sessions.

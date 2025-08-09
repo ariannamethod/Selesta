@@ -36,6 +36,15 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CREATOR_CHAT_ID = os.getenv("CREATOR_CHAT_ID")
 CREATOR_USERNAME = os.getenv("CREATOR_USERNAME", "ariannamethod")
 PORT = int(os.getenv("PORT", "8080"))
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS")
+if ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS = [
+        origin.strip()
+        for origin in ALLOWED_ORIGINS.split(",")
+        if origin.strip()
+    ]
+else:
+    ALLOWED_ORIGINS = ["http://localhost", "http://localhost:3000"]
 
 # Константы
 AGENT_NAME = "Selesta"
@@ -67,7 +76,7 @@ app = FastAPI(title="Selesta Assistant", version=VERSION)
 # Настраиваем CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # В продакшне лучше указать конкретные домены
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
