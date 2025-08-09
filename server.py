@@ -6,6 +6,8 @@ import random
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Union
 
+from pydantic import BaseModel
+
 # FastAPI для API-сервера
 from fastapi import FastAPI, Request, Body, BackgroundTasks, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -90,6 +92,20 @@ VECTOR_LOCK_FILE = os.path.join(DATA_DIR, "vectorization.lock")
 # Минимальное время между повторными векторизациями (24 часа)
 VECTOR_LOCK_TTL = 24 * 3600
 
+
+class MessageRequest(BaseModel):
+    message: str
+    chat_id: str
+    is_group: bool = False
+    username: Optional[str] = None
+    reply_to_bot: bool = False
+
+
+class MessageResponse(BaseModel):
+    response: Optional[str] = None
+    response_parts: Optional[List[str]] = None
+    multi_part: bool
+
 async def startup_vectorization() -> None:
     """Проверяет и обновляет векторное хранилище после запуска.
 
@@ -140,7 +156,7 @@ async def startup_vectorization() -> None:
     finally:
         vectorization_done = True
 
-async def initialize_config() -> Dict[str, Any]:
+async def initialize_config() -> MessageResponse:
     """Загружает и инициализирует конфигурацию Селесты."""
     try:
         # Проверка core.json через "маяк"
@@ -519,26 +535,26 @@ async def root():
         "timestamp": datetime.now().isoformat()
     }
 
-@app.post("/message")
+@app.post("/message", response_model=MessageResponse)
 async def handle_message(
     background_tasks: BackgroundTasks,
-    request: Dict[str, Any] = Body(...)
-) -> Dict[str, Any]:
+    request: MessageRequest
+) -> MessageResponse:
     """
     Обрабатывает входящие текстовые сообщения.
     
     Args:
         background_tasks: Объект для добавления фоновых задач
-        request: Тело запроса с сообщением и метаданными
+        request: Данные сообщения и метаданные
         
     Returns:
-        Dict[str, Any]: Ответ с сообщением Селесты
+        MessageResponse: Ответ с сообщением Селесты
     """
-    message = request.get("message", "")
-    chat_id = request.get("chat_id")
-    is_group = request.get("is_group", False)
-    username = request.get("username")
-    reply_to_bot = request.get("reply_to_bot", False)
+    message = request.message
+    chat_id = request.chat_id
+    is_group = request.is_group
+    username = request.username
+    reply_to_bot = request.reply_to_bot
     
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
@@ -555,11 +571,11 @@ async def handle_message(
     
     # Проверяем формат ответа
     if response is None:
-        return {"response": None, "multi_part": False}
+        return MessageResponse(response=None, multi_part=False)
     elif isinstance(response, list):
-        return {"response_parts": response, "multi_part": True}
+        return MessageResponse(response_parts=response, multi_part=True)
     else:
-        return {"response": response, "multi_part": False}
+        return MessageResponse(response=response, multi_part=False)
 
 async def process_and_send_response(
     message: str,
@@ -623,7 +639,7 @@ async def process_and_send_response(
 async def webhook(
     request: Request,
     background_tasks: BackgroundTasks
-) -> Dict[str, Any]:
+) -> MessageResponse:
     """
     Обрабатывает вебхуки от Telegram или других источников.
     
@@ -762,7 +778,7 @@ async def healthcheck() -> Dict[str, str]:
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 @app.get("/status")
-async def status() -> Dict[str, Any]:
+async def status() -> MessageResponse:
     """
     Расширенный статус приложения.
     
@@ -795,7 +811,7 @@ async def status() -> Dict[str, Any]:
 @app.get("/wilderness")
 async def trigger_wilderness(
     background_tasks: BackgroundTasks
-) -> Dict[str, Any]:
+) -> MessageResponse:
     """
     Ручной запуск wilderness excursion.
     
