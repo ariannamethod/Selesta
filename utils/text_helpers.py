@@ -3,12 +3,51 @@ import httpx
 import asyncio
 from bs4 import BeautifulSoup
 import re
+import os
+import ipaddress
+import logging
 from typing import List, Dict, Any, Optional, Union, Tuple
 from urllib.parse import urlparse
 
 # Настройки по умолчанию
 DEFAULT_TIMEOUT = 15  # секунд
 DEFAULT_MAX_TEXT_LENGTH = 5000  # символов
+
+# Доменные списки
+ALLOWED_DOMAINS = set(filter(None, os.getenv("ALLOWED_DOMAINS", "").split(",")))
+DENIED_DOMAINS = set(filter(None, os.getenv("DENIED_DOMAINS", "").split(",")))
+
+# Конфигурация логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("text_helpers")
+
+def _domain_match(host: str, domain: str) -> bool:
+    """Проверяет соответствие домена, включая поддомены."""
+    return host == domain or host.endswith(f".{domain}")
+
+def _is_private_ip(host: str) -> bool:
+    """Определяет, является ли хост приватным IP."""
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_private or ip.is_loopback
+    except ValueError:
+        return False
+
+def _is_url_allowed(url: str) -> Tuple[bool, str]:
+    """Проверяет, разрешен ли URL для обработки."""
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+
+    if _is_private_ip(host):
+        return False, "приватный IP"
+
+    if any(_domain_match(host, d) for d in DENIED_DOMAINS):
+        return False, "домен запрещен"
+
+    if ALLOWED_DOMAINS and not any(_domain_match(host, d) for d in ALLOWED_DOMAINS):
+        return False, "домен не разрешен"
+
+    return True, ""
 
 def fuzzy_match(a: str, b: str) -> float:
     """
@@ -50,6 +89,10 @@ def extract_text_from_url(
         parsed_url = urlparse(url)
         if not parsed_url.scheme:
             url = "https://" + url
+        allowed, reason = _is_url_allowed(url)
+        if not allowed:
+            logger.warning(f"Blocked URL: {url} - {reason}")
+            return f"[URL заблокирован: {reason}]"
         
         # Устанавливаем заголовки для запроса
         headers = {
@@ -128,7 +171,11 @@ async def extract_text_from_url_async(
         parsed_url = urlparse(url)
         if not parsed_url.scheme:
             url = "https://" + url
-        
+        allowed, reason = _is_url_allowed(url)
+        if not allowed:
+            logger.warning(f"Blocked URL: {url} - {reason}")
+            return f"[URL заблокирован: {reason}]"
+
         # Устанавливаем заголовки для запроса
         headers = {
             "User-Agent": "Mozilla/5.0 (Selesta Agent)",
