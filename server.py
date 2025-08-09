@@ -5,6 +5,7 @@ import time
 import random
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Union
+from collections import OrderedDict
 
 # FastAPI для API-сервера
 from fastapi import FastAPI, Request, Body, BackgroundTasks, HTTPException, File, UploadFile
@@ -61,6 +62,13 @@ os.makedirs(UPLOADS_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CONFIG_DIR, exist_ok=True)
 
+# Настройки кэша памяти
+MEMORY_CACHE_SIZE = int(os.getenv("MEMORY_CACHE_SIZE", "100"))
+MEMORY_PERSISTENCE = os.getenv("MEMORY_PERSISTENCE", "none").lower()
+CHAT_HISTORY_DIR = os.path.join(DATA_DIR, "chat_histories")
+if MEMORY_PERSISTENCE == "disk":
+    os.makedirs(CHAT_HISTORY_DIR, exist_ok=True)
+
 # Создаем FastAPI приложение
 app = FastAPI(title="Selesta Assistant", version=VERSION)
 
@@ -80,7 +88,7 @@ app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 core_config = None
 last_check = 0
 last_wilderness = 0
-memory_cache: Dict[str, List[Dict[str, Any]]] = {}  # Кэш для хранения контекста разговоров
+memory_cache: OrderedDict[str, List[Dict[str, Any]]] = OrderedDict()  # Кэш для хранения контекста разговоров
 # Режим голосовых ответов для чатов
 voice_mode: Dict[str, bool] = {}
 # Флаг для предотвращения повторной векторизации при множественных стартах
@@ -203,6 +211,18 @@ async def wilderness_excursion() -> Optional[str]:
         log_event({"type": "wilderness", "status": "error", "error": str(e)})
         return None
 
+
+def persist_chat_history(chat_id: str, history: List[Dict[str, Any]]) -> None:
+    """Persist chat history before eviction based on strategy."""
+    if MEMORY_PERSISTENCE == "disk":
+        file_path = os.path.join(CHAT_HISTORY_DIR, f"{chat_id}.json")
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(history, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Error saving chat history for {chat_id}: {e}")
+
+
 def update_memory(chat_id: str, message: str, response: str, max_history: int = 5) -> None:
     """
     Обновляет память (контекст) для данного чата.
@@ -217,19 +237,25 @@ def update_memory(chat_id: str, message: str, response: str, max_history: int = 
     
     if not chat_id:
         return
-    
+
     if chat_id not in memory_cache:
         memory_cache[chat_id] = []
-    
+
     # Добавляем новую пару сообщение-ответ
     memory_cache[chat_id].append({
-        "message": message, 
-        "response": response, 
+        "message": message,
+        "response": response,
         "timestamp": datetime.now().isoformat()
     })
-    
+
     # Ограничиваем длину истории
     memory_cache[chat_id] = memory_cache[chat_id][-max_history:]
+    memory_cache.move_to_end(chat_id)
+
+    # Ограничиваем количество чатов в памяти
+    while len(memory_cache) > MEMORY_CACHE_SIZE:
+        oldest_chat_id, history = memory_cache.popitem(last=False)
+        persist_chat_history(oldest_chat_id, history)
 
 def get_memory_context(chat_id: str) -> str:
     """
@@ -243,7 +269,8 @@ def get_memory_context(chat_id: str) -> str:
     """
     if not chat_id or chat_id not in memory_cache:
         return ""
-    
+
+    memory_cache.move_to_end(chat_id)
     context_items = []
     for item in memory_cache[chat_id][-3:]:  # Берем только последние 3 записи
         context_items.append(f"User: {item['message']}")

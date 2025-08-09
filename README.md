@@ -19,6 +19,15 @@ Interacting with Selesta is an experience in emergent dialogue. She does not see
   in the background, allowing delayed or multi-part replies without hitting
   provider timeouts.
 
+## Configuration
+
+Selesta's in-memory chat cache can be tuned through environment variables:
+
+- `MEMORY_CACHE_SIZE` – maximum number of chat histories to keep in memory (default: `100`).
+- `MEMORY_PERSISTENCE` – strategy for evicted histories: `none` or `disk` (default: `none`).
+
+When `MEMORY_PERSISTENCE` is set to `disk`, histories are stored as JSON files under `data/chat_histories` before removal from memory.
+
 ## What We're Going To Do
 
 - **Expand Memory:** Integrate deeper memory layers and long-term context spanning across sessions.
