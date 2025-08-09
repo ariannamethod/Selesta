@@ -600,6 +600,10 @@ async def process_and_send_response(
                 caption=text_resp,
                 reply_to_message_id=reply_to_message_id,
             )
+            try:
+                os.remove(voice_file)
+            except Exception:
+                pass
         else:
             if isinstance(response, list):
                 sent = await send_multipart_message(chat_id, response, reply_to_message_id=reply_to_message_id)
