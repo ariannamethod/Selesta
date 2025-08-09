@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 # Импортируем утилиты
 from utils.claude import claude_emergency
 from utils.file_handling import extract_text_from_file_async
-from utils.imagine import generate_image
+from utils.imagine import generate_image_async
 from utils.journal import log_event, wilderness_log
 from utils.lighthouse import check_core_json
 from utils.resonator import build_system_prompt, get_random_wilderness_topic
@@ -326,7 +326,7 @@ async def process_message(
                     prompt = message
             
             # Генерируем изображение
-            image_url = generate_image(prompt, chat_id)
+            image_url = await generate_image_async(prompt, chat_id)
             return f"🎨 {image_url}"
         
         # Проверка на URL в сообщении

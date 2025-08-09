@@ -1,9 +1,7 @@
 import os
-import random
-import time
 import httpx
 import asyncio
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional
 
 # Поддерживаемые модели и размеры
 DALL_E_3_MODELS = ["dall-e-3"]
@@ -54,6 +52,8 @@ def enhance_prompt(prompt: str) -> str:
         return f"{prompt}, high quality"
     
     return prompt
+
+__all__ = ["generate_image_async"]
 
 async def generate_image_async(
     prompt: str,
@@ -166,37 +166,3 @@ async def generate_image_async(
                 return f"{IMAGE_EMOJI['error']} [Image generation error: {str(e)}]"
     
     return f"{IMAGE_EMOJI['error']} [Image generation failed after {MAX_RETRIES} attempts.]"
-
-def generate_image(
-    prompt: str,
-    chat_id: Optional[str] = None,
-    model: str = "dall-e-3",
-    size: str = "1024x1024"
-) -> str:
-    """
-    Синхронная обертка для асинхронной функции generate_image_async.
-    
-    Args:
-        prompt: Текстовый запрос для генерации
-        chat_id: ID чата (для логирования)
-        model: Модель для генерации (dall-e-3 или dall-e-2)
-        size: Размер генерируемого изображения
-    
-    Returns:
-        URL сгенерированного изображения или сообщение об ошибке
-    """
-    # Если промпт пустой, возвращаем ошибку
-    if not prompt or len(prompt.strip()) == 0:
-        return f"{IMAGE_EMOJI['error']} [Image generation error: Empty prompt.]"
-    
-    # Запускаем асинхронную функцию синхронно
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        # Если event loop не существует, создаем новый
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    return loop.run_until_complete(
-        generate_image_async(prompt, chat_id, model, size)
-    )
