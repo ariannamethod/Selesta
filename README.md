@@ -19,6 +19,11 @@ Interacting with Selesta is an experience in emergent dialogue. She does not see
   in the background, allowing delayed or multi-part replies without hitting
   provider timeouts.
 
+## API Endpoints
+
+- `POST /upload`: Uploads a file and stores it on the server. The maximum
+  allowed file size is 10 MB.
+
 ## What We're Going To Do
 
 - **Expand Memory:** Integrate deeper memory layers and long-term context spanning across sessions.

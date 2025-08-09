@@ -45,6 +45,7 @@ WILDERNESS_INTERVAL = 72  # Wilderness excursion каждые 72 часа
 TRIGGER_WORDS = ["нарисуй", "представь", "визуализируй", "изобрази", "draw", "imagine", "visualize"]
 MAX_RESPONSE_LENGTH = 4096  # Максимальная длина одного сообщения
 MAX_PARAGRAPHS = int(os.getenv("MAX_PARAGRAPHS", "3"))
+MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", str(10 * 1024 * 1024)))  # 10 MB
 
 # Имя бота и дополнительные параметры для группового поведения
 BOT_USERNAME = os.getenv("BOT_USERNAME", "").lower()
@@ -686,36 +687,55 @@ async def upload_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...)
 ) -> Dict[str, str]:
-    """
+    f"""
     Загружает файл и сохраняет его на сервере.
-    
+
+    Максимальный размер файла: {MAX_UPLOAD_SIZE // (1024 * 1024)} MB.
+
     Args:
         background_tasks: Объект для добавления фоновых задач
         file: Загруженный файл
-        
+
     Returns:
         Dict[str, str]: Информация о загруженном файле
     """
+    chunk_size = 1024 * 1024  # 1 MB
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_filename = f"{timestamp}_{file.filename.replace(' ', '_')}"
+    file_path = os.path.join(UPLOADS_DIR, safe_filename)
+
     try:
-        # Создаем имя файла с временной меткой
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_filename = f"{timestamp}_{file.filename.replace(' ', '_')}"
-        file_path = os.path.join(UPLOADS_DIR, safe_filename)
-        
-        # Сохраняем файл
-        contents = await file.read()
+        content_length = file.headers.get("content-length")
+        if content_length and int(content_length) > MAX_UPLOAD_SIZE:
+            raise HTTPException(status_code=413, detail="File too large")
+
+        total_size = 0
         with open(file_path, "wb") as f:
-            f.write(contents)
-        
-        log_event({"type": "file_uploaded", "filename": safe_filename, "size": len(contents)})
-        
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > MAX_UPLOAD_SIZE:
+                    raise HTTPException(status_code=413, detail="File too large")
+                f.write(chunk)
+
+        log_event({"type": "file_uploaded", "filename": safe_filename, "size": total_size})
+
         return {
             "filename": safe_filename,
             "path": file_path,
-            "size": len(contents),
+            "size": total_size,
             "content_type": file.content_type
         }
+    except HTTPException:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        log_event({"type": "file_upload_error", "error": "File too large"})
+        raise
     except Exception as e:
+        if os.path.exists(file_path):
+            os.remove(file_path)
         print(f"Error uploading file: {e}")
         log_event({"type": "file_upload_error", "error": str(e)})
         raise HTTPException(status_code=500, detail=str(e))
