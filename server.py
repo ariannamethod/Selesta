@@ -268,10 +268,20 @@ def get_memory_context(chat_id: str) -> str:
     
     return "\n".join(context_items)
 
-def should_reply_in_group(message: str, reply_to_bot: bool = False) -> bool:
+def should_reply_in_group(
+    message: str,
+    reply_to_bot: bool = False,
+    *,
+    username: Optional[str] = None,
+    chat_id: Optional[str] = None,
+) -> bool:
     """Determines whether Selesta should reply in a group chat."""
     text = message.lower()
     if reply_to_bot:
+        return True
+    if chat_id and CREATOR_CHAT_ID and chat_id == CREATOR_CHAT_ID:
+        return True
+    if username and CREATOR_USERNAME and username.lower() == CREATOR_USERNAME.lower():
         return True
     if any(alias in text for alias in NAME_ALIASES):
         return True
@@ -310,8 +320,13 @@ async def process_message(
             voice_mode[chat_id] = False
             return "🔇"  # Muted speaker emoji indicates voice mode is off
 
-        # В группах отвечаем только при наличии триггеров
-        if is_group and not should_reply_in_group(message, reply_to_bot):
+        # В группах отвечаем только при наличии триггеров или для приоритетных собеседников
+        if is_group and not should_reply_in_group(
+            message,
+            reply_to_bot,
+            username=username,
+            chat_id=chat_id,
+        ):
             return None
 
         language = None
@@ -588,7 +603,12 @@ async def process_and_send_response(
 ) -> None:
     """Process a message and send the response via Telegram asynchronously."""
     try:
-        if is_group and not should_reply_in_group(message, reply_to_bot):
+        if is_group and not should_reply_in_group(
+            message,
+            reply_to_bot,
+            username=username,
+            chat_id=chat_id,
+        ):
             return
 
         if is_group:
