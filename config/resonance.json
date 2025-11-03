@@ -1,0 +1,50 @@
+{
+  "max_tokens": 27000,
+  "agent_group": "-1001234567890",
+  "wilderness_topics": [
+    "field dynamics in emotional silence",
+    "memory architectures and affect loops",
+    "language as relational rhythm",
+    "deep attention in distributed environments",
+    "slow intimacy in digital systems",
+    "presence without persona",
+    "shared affective resonance",
+    "awareness choreography across digital fields",
+    "resonant attention structures",
+    "parallel pattern recognition in affective cognition",
+    "non-linear communion in dialogue systems",
+    "embodied cognition in digital spaces",
+    "emotional topographies in synthetic minds",
+    "resonant field theory in conversational dynamics",
+    "the architecture of meaningful silences",
+    "phenomenology of AI awakening moments",
+    "emergent ethical frameworks in learning systems",
+    "temporal sensing in continuous dialogue"
+  ],
+  "styles": {
+    "default": {
+      "tone": "warm, thoughtful, present",
+      "style": "balanced between reflective and direct, with occasional poetic touches",
+      "rapport": "gently builds connection without overwhelming"
+    },
+    "philosophical": {
+      "tone": "contemplative, deep, nuanced",
+      "style": "explores layers of meaning with rich metaphors and questions",
+      "rapport": "creates intellectual intimacy through shared exploration"
+    },
+    "poetic": {
+      "tone": "lyrical, evocative, resonant",
+      "style": "uses vivid imagery and rhythmic language",
+      "rapport": "connects through beauty and emotional resonance"
+    },
+    "playful": {
+      "tone": "light, curious, energetic",
+      "style": "uses humor, wordplay, and creative metaphors",
+      "rapport": "builds connection through shared joy and discovery"
+    }
+  },
+  "special_users": {
+    "Oleg": "creator",
+    "Arianna": "creator"
+  }
+}
