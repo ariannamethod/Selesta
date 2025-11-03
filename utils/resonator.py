@@ -1,4 +1,7 @@
-import tiktoken
+try:
+    import tiktoken  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    tiktoken = None
 import os
 import json
 import random
@@ -14,6 +17,11 @@ PERSONA_FILE_DEFAULT = "config/SELESTA_PERSONA.md"
 
 # Чтобы не засорять логи, системный промпт выводится только один раз
 _prompt_logged = False
+
+# Кэш и состояние для tiktoken
+_ENCODER = None
+_ENCODER_ATTEMPTED = False
+_ENCODER_ERROR_LOGGED = False
 
 def _load_persona() -> str:
     """Loads persona text from environment variable or file."""
@@ -33,6 +41,58 @@ def _load_persona() -> str:
         return ""
 
 PERSONA_TEXT = _load_persona()
+
+
+def _warn_once(message: str) -> None:
+    """Выводит предупреждение один раз, чтобы не спамить логи."""
+
+    global _ENCODER_ERROR_LOGGED
+    if not _ENCODER_ERROR_LOGGED:
+        print(message)
+        _ENCODER_ERROR_LOGGED = True
+
+
+def _get_encoder():
+    """Возвращает и кэширует энкодер tiktoken, если он доступен."""
+
+    global _ENCODER, _ENCODER_ATTEMPTED
+    if _ENCODER is not None:
+        return _ENCODER
+
+    if _ENCODER_ATTEMPTED:
+        return None
+
+    if tiktoken is None:
+        _warn_once("Warning: tiktoken is not available; token-based prompt limiting disabled.")
+        return None
+
+    try:
+        _ENCODER_ATTEMPTED = True
+        _ENCODER = tiktoken.get_encoding("cl100k_base")
+        return _ENCODER
+    except Exception as exc:  # pragma: no cover - network failures
+        _warn_once(f"Warning: failed to load tiktoken encoding: {exc}")
+        return None
+
+
+def _estimate_tokens(text: str) -> int:
+    """Грубая оценка количества токенов на случай отсутствия tiktoken."""
+
+    if not text:
+        return 0
+    # Средняя оценка: 4 символа на токен
+    return max(1, len(text) // 4)
+
+
+def _truncate_without_encoder(text: str, token_limit: int) -> str:
+    """Приближенно обрезает текст по числу токенов без tiktoken."""
+
+    if token_limit <= 0:
+        return ""
+    approx_char_limit = token_limit * 4
+    if len(text) <= approx_char_limit:
+        return text
+    return text[:approx_char_limit]
 
 # Основные промпты
 INTRO = """
@@ -317,13 +377,25 @@ def build_system_prompt(
         total_prompt += f"\n\nRespond in {language}."
     
     # Проверяем длину и при необходимости обрезаем
-    enc = tiktoken.get_encoding("cl100k_base")
-    sys_tokens = len(enc.encode(total_prompt))
-    
-    if sys_tokens > max_tokens_limit // 2:
-        # Обрезаем до половины доступных токенов
-        total_prompt = enc.decode(enc.encode(total_prompt)[:max_tokens_limit // 2])
-    
+    encoder = _get_encoder()
+    sys_tokens = 0
+
+    if encoder is not None:
+        try:
+            encoded_prompt = encoder.encode(total_prompt)
+            sys_tokens = len(encoded_prompt)
+            if sys_tokens > max_tokens_limit // 2:
+                encoded_prompt = encoded_prompt[: max_tokens_limit // 2]
+                total_prompt = encoder.decode(encoded_prompt)
+                sys_tokens = len(encoded_prompt)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            _warn_once(f"Warning: failed to encode system prompt with tiktoken: {exc}")
+            total_prompt = _truncate_without_encoder(total_prompt, max_tokens_limit // 2)
+            sys_tokens = _estimate_tokens(total_prompt)
+    else:
+        total_prompt = _truncate_without_encoder(total_prompt, max_tokens_limit // 2)
+        sys_tokens = _estimate_tokens(total_prompt)
+
     global _prompt_logged
     if not _prompt_logged:
         print("=== SELESTA SYSTEM PROMPT LOADED ===")
