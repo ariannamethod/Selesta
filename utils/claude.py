@@ -6,10 +6,8 @@ from typing import Optional, Dict, Any, List, Union
 
 # Константы для работы с Claude
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-# По умолчанию используем стабильную модель Claude 3
-CLAUDE_MODEL = "claude-3-opus-20240229"
-# Резервная модель на случай проблем
-CLAUDE_MODEL_FALLBACK = "claude-instant-1"
+# Используем Claude Sonnet 4.5 - единственная модель, без fallback
+CLAUDE_MODEL = "claude-sonnet-4-20250514"
 
 async def claude_emergency(
     prompt: str,
@@ -20,7 +18,7 @@ async def claude_emergency(
 ) -> str:
     """
     Модуль для работы с Claude API от Anthropic.
-    Использует стабильную модель Claude 3 с автоматическим переходом на резервную модель при необходимости.
+    Использует Claude Sonnet 4.5. Без fallback - если API недоступен, возвращается ошибка.
     
     Args:
         prompt: Текст запроса к модели
@@ -35,9 +33,8 @@ async def claude_emergency(
     if not ANTHROPIC_API_KEY:
         return "[Anthropic API key not configured.]"
     
-    # Добавляем эмоджи как тихий маркер источника
     # Тихий маркер источника ответа
-    quiet_marker = "🔷 "  # Маркер для Claude 3
+    quiet_marker = "🔷 "  # Маркер для Claude Sonnet 4.5
     
     try:
         # Формируем системный промпт
@@ -66,28 +63,12 @@ async def claude_emergency(
         
         # Выполняем запрос к API
         async with httpx.AsyncClient(timeout=60.0) as client:
-            try:
-                response = await client.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers=headers,
-                    json=data
-                )
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                # Если произошла ошибка с основной моделью, пробуем резервную
-                if response.status_code in (400, 404, 429, 500, 502, 503):
-                    print(f"Claude error ({response.status_code}), falling back to {CLAUDE_MODEL_FALLBACK}")
-                    data["model"] = CLAUDE_MODEL_FALLBACK
-                    response = await client.post(
-                        "https://api.anthropic.com/v1/messages",
-                        headers=headers,
-                        json=data
-                    )
-                    response.raise_for_status()
-                    quiet_marker = "🔷 "  # Маркер для Claude 3
-                else:
-                    raise
-                    
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers,
+                json=data
+            )
+            response.raise_for_status()
             response_data = response.json()
             
             # Извлекаем текст ответа
@@ -114,6 +95,7 @@ async def claude_completion(
 ) -> Union[str, Dict[str, Any]]:
     """
     Расширенная функция для работы с Claude API, поддерживающая формат диалога.
+    Использует Claude Sonnet 4.5. Без fallback - если API недоступен, возвращается ошибка.
     
     Args:
         messages: Список сообщений в формате диалога
@@ -148,27 +130,12 @@ async def claude_completion(
         
         # Выполняем запрос к API
         async with httpx.AsyncClient(timeout=60.0) as client:
-            try:
-                response = await client.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers=headers,
-                    json=data
-                )
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                # Если произошла ошибка с основной моделью, пробуем резервную
-                if response.status_code in (400, 404, 429, 500, 502, 503):
-                    print(f"Claude error ({response.status_code}), falling back to {CLAUDE_MODEL_FALLBACK}")
-                    data["model"] = CLAUDE_MODEL_FALLBACK
-                    response = await client.post(
-                        "https://api.anthropic.com/v1/messages",
-                        headers=headers,
-                        json=data
-                    )
-                    response.raise_for_status()
-                else:
-                    raise
-                    
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers,
+                json=data
+            )
+            response.raise_for_status()
             return response.json()
     except Exception as e:
         error_msg = f"Claude error: {str(e)}"

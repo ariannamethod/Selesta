@@ -660,7 +660,7 @@ async def process_and_send_response(
 async def webhook(
     request: Request,
     background_tasks: BackgroundTasks
-) -> MessageResponse:
+) -> Dict[str, Any]:
     """
     Обрабатывает вебхуки от Telegram или других источников.
     
