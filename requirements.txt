@@ -12,7 +12,7 @@ pdfminer.six
 tiktoken
 beautifulsoup4
 pillow
-pinecone
+numpy
 pydub
 pyyaml
 rich

@@ -22,7 +22,6 @@ from utils.lighthouse import check_core_json
 from utils.resonator import build_system_prompt, get_random_wilderness_topic
 from utils.text_helpers import extract_text_from_url_async, summarize_text
 from utils.text_processing import process_text, send_long_message
-from utils.limit_paragraphs import limit_paragraphs
 from utils.vector_store import vectorize_all_files, semantic_search, is_vector_store_available
 from utils.telegram_sender import (
     send_message,
@@ -45,8 +44,7 @@ VERSION = "1.1.0"
 CHECK_INTERVAL = 3600  # Проверка конфигурации каждый час
 WILDERNESS_INTERVAL = 72  # Wilderness excursion каждые 72 часа
 TRIGGER_WORDS = ["нарисуй", "представь", "визуализируй", "изобрази", "draw", "imagine", "visualize"]
-MAX_RESPONSE_LENGTH = 4096  # Максимальная длина одного сообщения
-MAX_PARAGRAPHS = int(os.getenv("MAX_PARAGRAPHS", "3"))
+MAX_RESPONSE_LENGTH = 4096  # Максимальная длина одного сообщения (технический лимит Telegram)
 MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", str(10 * 1024 * 1024)))  # 10 MB
 
 # Имя бота и дополнительные параметры для группового поведения
@@ -419,8 +417,7 @@ async def process_message(
             system_prompt=system_prompt,
             notify_creator=chat_id==CREATOR_CHAT_ID
         )
-        response = limit_paragraphs(response, MAX_PARAGRAPHS)
-        
+
         # Если ответ слишком длинный, разбиваем его на части
         if len(response) > MAX_RESPONSE_LENGTH:
             response_parts = send_long_message(response)

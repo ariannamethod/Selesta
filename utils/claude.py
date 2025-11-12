@@ -32,10 +32,7 @@ async def claude_emergency(
     """
     if not ANTHROPIC_API_KEY:
         return "[Anthropic API key not configured.]"
-    
-    # Тихий маркер источника ответа
-    quiet_marker = "🔷 "  # Маркер для Claude Sonnet 4.5
-    
+
     try:
         # Формируем системный промпт
         if not system_prompt:
@@ -79,13 +76,13 @@ async def claude_emergency(
                         content_text += content_block.get("text", "")
                 
                 if content_text:
-                    return quiet_marker + content_text
-                
-        return quiet_marker + "[No content in Claude response.]"
+                    return content_text
+
+        return "[No content in Claude response.]"
     except Exception as e:
         error_msg = f"[Claude error: {str(e)}]"
         print(error_msg)
-        return quiet_marker + error_msg
+        return error_msg
 
 async def claude_completion(
     messages: List[Dict[str, Any]],
