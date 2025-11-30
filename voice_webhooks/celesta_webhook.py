@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from selesta_identity import build_system_prompt
 
 # Configuration
-PORT = int(os.getenv("CELESTA_WEBHOOK_PORT", "8001"))
+PORT = int(os.getenv("CELESTA_WEBHOOK_PORT", "8005"))
 WEBHOOK_TOKEN = os.getenv("CELESTA_WEBHOOK_TOKEN", "celesta_voice_token")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 

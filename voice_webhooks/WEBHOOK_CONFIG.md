@@ -10,26 +10,28 @@ Voice webhooks allow the Lighthouse APK (vagent fork) to communicate with Celest
 
 ## Webhook Servers
 
-### 1. Celesta Webhook
-- **Port:** `8001`
-- **File:** `~/selesta/voice_webhooks/celesta_webhook.py`
-- **Bearer Token:** Set via env var `CELESTA_WEBHOOK_TOKEN`
-- **Default Token:** `celesta_voice_token` (change this!)
-
-**URL for APK:**
-```
-http://localhost:8001/webhook
-```
-
-### 2. Defender Webhook
-- **Port:** `8002`
+### 1. Defender Webhook
+- **Port:** `8003`
 - **File:** `~/selesta/voice_webhooks/defender_webhook.py`
 - **Bearer Token:** Set via env var `DEFENDER_WEBHOOK_TOKEN`
 - **Default Token:** `defender_voice_token` (change this!)
+- **Note:** Port 8003 matches Defender in main ariannamethod repo
 
 **URL for APK:**
 ```
-http://localhost:8002/webhook
+http://localhost:8003/webhook
+```
+
+### 2. Celesta Webhook
+- **Port:** `8005`
+- **File:** `~/selesta/voice_webhooks/celesta_webhook.py`
+- **Bearer Token:** Set via env var `CELESTA_WEBHOOK_TOKEN`
+- **Default Token:** `celesta_voice_token` (change this!)
+- **Note:** Port 8005 is unique to Celesta, different from Arianna (8001)
+
+**URL for APK:**
+```
+http://localhost:8005/webhook
 ```
 
 ---
@@ -39,13 +41,13 @@ http://localhost:8002/webhook
 Add to `~/.bashrc` or `~/selesta/.env`:
 
 ```bash
-# Celesta webhook
-export CELESTA_WEBHOOK_PORT=8001
-export CELESTA_WEBHOOK_TOKEN="your_secure_celesta_token_here"
-
-# Defender webhook
-export DEFENDER_WEBHOOK_PORT=8002
+# Defender webhook (port 8003 matches main repo)
+export DEFENDER_WEBHOOK_PORT=8003
 export DEFENDER_WEBHOOK_TOKEN="your_secure_defender_token_here"
+
+# Celesta webhook (port 8005 unique to her)
+export CELESTA_WEBHOOK_PORT=8005
+export CELESTA_WEBHOOK_TOKEN="your_secure_celesta_token_here"
 
 # Anthropic API (already set)
 export ANTHROPIC_API_KEY="sk-ant-..."
@@ -82,22 +84,22 @@ ps aux | grep webhook | grep -v grep
 
 Configure in Lighthouse APK settings:
 
-### Celesta Entity
-```json
-{
-  "name": "Celesta",
-  "url": "http://localhost:8001/webhook",
-  "bearer_token": "your_secure_celesta_token_here",
-  "method": "POST"
-}
-```
-
 ### Defender Entity
 ```json
 {
   "name": "Defender",
-  "url": "http://localhost:8002/webhook",
+  "url": "http://localhost:8003/webhook",
   "bearer_token": "your_secure_defender_token_here",
+  "method": "POST"
+}
+```
+
+### Celesta Entity
+```json
+{
+  "name": "Celesta",
+  "url": "http://localhost:8005/webhook",
+  "bearer_token": "your_secure_celesta_token_here",
   "method": "POST"
 }
 ```
@@ -168,7 +170,7 @@ View conversation history for a session.
 ### Webhook won't start
 ```bash
 # Check if port is in use
-netstat -tulpn | grep -E "8001|8002"
+netstat -tulpn | grep -E "8003|8005"
 
 # Check logs
 tail -f ~/selesta/logs/celesta_daemon.log
@@ -190,17 +192,17 @@ tail -f ~/selesta/logs/celesta_daemon.log
 ## Quick Test
 
 ```bash
-# Test Celesta webhook
-curl -X POST http://localhost:8001/webhook \
-  -H "Authorization: Bearer celesta_voice_token" \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Hello Celesta!", "sessionID": "test"}'
-
-# Test Defender webhook
-curl -X POST http://localhost:8002/webhook \
+# Test Defender webhook (port 8003)
+curl -X POST http://localhost:8003/webhook \
   -H "Authorization: Bearer defender_voice_token" \
   -H "Content-Type: application/json" \
   -d '{"prompt": "Status report", "sessionID": "test"}'
+
+# Test Celesta webhook (port 8005)
+curl -X POST http://localhost:8005/webhook \
+  -H "Authorization: Bearer celesta_voice_token" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Hello Celesta!", "sessionID": "test"}'
 ```
 
 ---

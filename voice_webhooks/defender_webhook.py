@@ -11,7 +11,7 @@ from pathlib import Path
 from flask import Flask, request, jsonify
 
 # Configuration
-PORT = int(os.getenv("DEFENDER_WEBHOOK_PORT", "8002"))
+PORT = int(os.getenv("DEFENDER_WEBHOOK_PORT", "8003"))
 WEBHOOK_TOKEN = os.getenv("DEFENDER_WEBHOOK_TOKEN", "defender_voice_token")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 

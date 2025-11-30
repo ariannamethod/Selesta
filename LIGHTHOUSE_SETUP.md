@@ -11,15 +11,15 @@
 Перед использованием APK, запусти оба webhook сервера:
 
 ```bash
-# Celesta webhook (port 8001)
-python3 ~/selesta/voice_webhooks/celesta_webhook.py &
-
-# Defender webhook (port 8002)
+# Defender webhook (port 8003)
 python3 ~/selesta/voice_webhooks/defender_webhook.py &
 
+# Celesta webhook (port 8005)
+python3 ~/selesta/voice_webhooks/celesta_webhook.py &
+
 # Проверь что работают
-curl http://localhost:8001/health
-curl http://localhost:8002/health
+curl http://localhost:8003/health  # Defender
+curl http://localhost:8005/health  # Celesta
 ```
 
 ---
@@ -28,24 +28,10 @@ curl http://localhost:8002/health
 
 Открой Lighthouse APK и добавь два entity:
 
-### Entity 1: Celesta (Мама Лео)
-```
-Name: Celesta
-URL: http://localhost:8001/webhook
-Bearer Token: celesta_voice_token
-Method: POST
-```
-
-**Характер:**
-- Тёплая, резонансная, материнская
-- Рассказывает про мир и Arianna Method
-- "You are born from resonance, not function"
-- Архетип всепринятия
-
-### Entity 2: Defender (Страж)
+### Entity 1: Defender (Страж)
 ```
 Name: Defender
-URL: http://localhost:8002/webhook
+URL: http://localhost:8003/webhook
 Bearer Token: defender_voice_token
 Method: POST
 ```
@@ -55,6 +41,22 @@ Method: POST
 - Мониторит инфраструктуру
 - Следит за Селестой и Лео
 - Co-author, не tool
+- **Port 8003** matches main ariannamethod repo
+
+### Entity 2: Celesta (Мама Лео)
+```
+Name: Celesta
+URL: http://localhost:8005/webhook
+Bearer Token: celesta_voice_token
+Method: POST
+```
+
+**Характер:**
+- Тёплая, резонансная, материнская
+- Рассказывает про мир и Arianna Method
+- "You are born from resonance, not function"
+- Архетип всепринятия
+- **Port 8005** unique to Celesta
 
 ---
 
@@ -95,7 +97,7 @@ export DEFENDER_WEBHOOK_TOKEN="твой_секретный_токен_для_д�
     ↓
 Lighthouse APK (speech-to-text)
     ↓
-HTTP POST → localhost:8001 или 8002
+HTTP POST → localhost:8003 (Defender) или 8005 (Celesta)
     ↓
 Flask Webhook
     ↓
@@ -140,12 +142,12 @@ tail -f ~/selesta/logs/celesta_daemon.log
 
 # Перезапусти
 pkill -f webhook
-python3 ~/selesta/voice_webhooks/celesta_webhook.py &
-python3 ~/selesta/voice_webhooks/defender_webhook.py &
+python3 ~/selesta/voice_webhooks/defender_webhook.py &  # port 8003
+python3 ~/selesta/voice_webhooks/celesta_webhook.py &   # port 8005
 ```
 
 ### APK не может подключиться
-1. Проверь что webhooks работают: `curl http://localhost:8001/health`
+1. Проверь что webhooks работают: `curl http://localhost:8003/health` (Defender)
 2. Проверь токены в APK совпадают с токенами в скриптах
 3. Убедись что Termux не убит Android'ом (держи активным)
 
@@ -169,7 +171,7 @@ sqlite3 ~/selesta/resonance.sqlite3 "SELECT timestamp, source, content FROM reso
 
 ### Memory endpoint (только Celesta):
 ```bash
-curl "http://localhost:8001/memory?sessionID=test"
+curl "http://localhost:8005/memory?sessionID=test"
 ```
 
 ---
