@@ -200,3 +200,12 @@ resonance.sqlite3
 # Leo's internal databases
 leo/*.sqlite3
 leo/snapshots/
+
+# State and logs
+state/
+logs/
+*.log
+
+# Cache files
+.repo_cache.json
+.config_cache.json
