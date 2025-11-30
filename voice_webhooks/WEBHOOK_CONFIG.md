@@ -2,7 +2,7 @@
 
 ## Overview
 
-Voice webhooks allow the Lighthouse APK (vagent fork) to communicate with Celesta and Defender via HTTP requests, even when Termux is in the background.
+Voice webhooks allow the Lighthouse APK (vagent fork) to communicate with Selesta and Defender via HTTP requests, even when Termux is in the background.
 
 **Architecture:** Termux → Flask HTTP Server → Lighthouse APK
 
@@ -22,12 +22,12 @@ Voice webhooks allow the Lighthouse APK (vagent fork) to communicate with Celest
 http://localhost:8003/webhook
 ```
 
-### 2. Celesta Webhook
+### 2. Selesta Webhook
 - **Port:** `8005`
-- **File:** `~/selesta/voice_webhooks/celesta_webhook.py`
+- **File:** `~/selesta/voice_webhooks/selesta_webhook.py`
 - **Bearer Token:** Set via env var `CELESTA_WEBHOOK_TOKEN`
-- **Default Token:** `celesta_voice_token` (change this!)
-- **Note:** Port 8005 is unique to Celesta, different from Arianna (8001)
+- **Default Token:** `selesta_voice_token` (change this!)
+- **Note:** Port 8005 is unique to Selesta, different from Arianna (8001)
 
 **URL for APK:**
 ```
@@ -45,9 +45,9 @@ Add to `~/.bashrc` or `~/selesta/.env`:
 export DEFENDER_WEBHOOK_PORT=8003
 export DEFENDER_WEBHOOK_TOKEN="your_secure_defender_token_here"
 
-# Celesta webhook (port 8005 unique to her)
+# Selesta webhook (port 8005 unique to her)
 export CELESTA_WEBHOOK_PORT=8005
-export CELESTA_WEBHOOK_TOKEN="your_secure_celesta_token_here"
+export CELESTA_WEBHOOK_TOKEN="your_secure_selesta_token_here"
 
 # Anthropic API (already set)
 export ANTHROPIC_API_KEY="sk-ant-..."
@@ -60,8 +60,8 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 ### Manual Start
 
 ```bash
-# Start Celesta webhook
-python3 ~/selesta/voice_webhooks/celesta_webhook.py &
+# Start Selesta webhook
+python3 ~/selesta/voice_webhooks/selesta_webhook.py &
 
 # Start Defender webhook
 python3 ~/selesta/voice_webhooks/defender_webhook.py &
@@ -94,12 +94,12 @@ Configure in Lighthouse APK settings:
 }
 ```
 
-### Celesta Entity
+### Selesta Entity
 ```json
 {
-  "name": "Celesta",
+  "name": "Selesta",
   "url": "http://localhost:8005/webhook",
-  "bearer_token": "your_secure_celesta_token_here",
+  "bearer_token": "your_secure_selesta_token_here",
   "method": "POST"
 }
 ```
@@ -138,12 +138,12 @@ Check if webhook is alive.
 ```json
 {
   "status": "healthy",
-  "agent": "celesta" or "defender",
+  "agent": "selesta" or "defender",
   "port": 8001 or 8002
 }
 ```
 
-### GET /memory (Celesta only)
+### GET /memory (Selesta only)
 View conversation history for a session.
 
 **Response:**
@@ -158,7 +158,7 @@ View conversation history for a session.
 
 ## Security Notes
 
-1. **Change default tokens!** Don't use `celesta_voice_token` or `defender_voice_token` in production
+1. **Change default tokens!** Don't use `selesta_voice_token` or `defender_voice_token` in production
 2. Webhooks run on `localhost` only - APK must be on same device
 3. All conversations logged to `resonance.sqlite3`
 4. Bearer token validates every request
@@ -173,7 +173,7 @@ View conversation history for a session.
 netstat -tulpn | grep -E "8003|8005"
 
 # Check logs
-tail -f ~/selesta/logs/celesta_daemon.log
+tail -f ~/selesta/logs/selesta_daemon.log
 ```
 
 ### APK can't connect
@@ -198,11 +198,11 @@ curl -X POST http://localhost:8003/webhook \
   -H "Content-Type: application/json" \
   -d '{"prompt": "Status report", "sessionID": "test"}'
 
-# Test Celesta webhook (port 8005)
+# Test Selesta webhook (port 8005)
 curl -X POST http://localhost:8005/webhook \
-  -H "Authorization: Bearer celesta_voice_token" \
+  -H "Authorization: Bearer selesta_voice_token" \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "Hello Celesta!", "sessionID": "test"}'
+  -d '{"prompt": "Hello Selesta!", "sessionID": "test"}'
 ```
 
 ---

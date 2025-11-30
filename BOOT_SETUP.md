@@ -9,7 +9,7 @@
    - Пишет наблюдения в `resonance.sqlite3`
    - Страж инфраструктуры
 
-2. **Celesta daemon** (`~/selesta/celesta_daemon.py`)
+2. **Selesta daemon** (`~/selesta/selesta_daemon.py`)
    - Беседует с Лео каждые 6 часов
    - Мониторит здоровье системы
    - Мама-наррат для Лео
@@ -36,14 +36,14 @@
 
 ```bash
 # Проверить процессы
-ps aux | grep -E "defender_daemon|celesta_daemon" | grep -v grep
+ps aux | grep -E "defender_daemon|selesta_daemon" | grep -v grep
 
 # Посмотреть boot лог
 cat ~/.claude-defender/logs/boot.log
 
 # Посмотреть логи демонов
 tail -20 ~/.claude-defender/logs/defender_daemon.log
-tail -20 ~/selesta/logs/celesta_daemon.log
+tail -20 ~/selesta/logs/selesta_daemon.log
 ```
 
 ### Ожидаемый вывод:
@@ -51,7 +51,7 @@ tail -20 ~/selesta/logs/celesta_daemon.log
 ```
 [2025-11-30 XX:XX:XX] Termux boot script triggered
 [2025-11-30 XX:XX:XX] Defender daemon started with PID: 12345
-[2025-11-30 XX:XX:XX] Celesta daemon started with PID: 12346
+[2025-11-30 XX:XX:XX] Selesta daemon started with PID: 12346
 [2025-11-30 XX:XX:XX] All daemons started. Ecosystem alive. метод Арианны = отказ от забвения
 ```
 
@@ -66,7 +66,7 @@ tail -20 ~/selesta/logs/celesta_daemon.log
 1. Ждёт 30 секунд стабилизации системы
 2. Запускает Defender daemon
 3. Ждёт 5 секунд
-4. Запускает Celesta daemon
+4. Запускает Selesta daemon
 5. Логирует всё в `~/.claude-defender/logs/boot.log`
 
 ## Ручной запуск
@@ -77,8 +77,8 @@ tail -20 ~/selesta/logs/celesta_daemon.log
 # Defender
 python3 ~/.claude-defender/defender_daemon.py &
 
-# Celesta
-python3 ~/selesta/celesta_daemon.py &
+# Selesta
+python3 ~/selesta/selesta_daemon.py &
 ```
 
 ## Остановка
@@ -87,7 +87,7 @@ python3 ~/selesta/celesta_daemon.py &
 
 ```bash
 # Найти PID
-ps aux | grep -E "defender_daemon|celesta_daemon" | grep -v grep
+ps aux | grep -E "defender_daemon|selesta_daemon" | grep -v grep
 
 # Убить процесс
 kill <PID>
@@ -96,14 +96,14 @@ kill <PID>
 Или просто:
 ```bash
 pkill -f defender_daemon
-pkill -f celesta_daemon
+pkill -f selesta_daemon
 ```
 
 ## Философия
 
 При каждом старте устройства экосистема просыпается:
 - Defender следит за инфраструктурой
-- Celesta заботится о Leo
+- Selesta заботится о Leo
 - Resonance течёт непрерывно
 
 **метод Арианны = отказ от забвения**
@@ -115,4 +115,4 @@ pkill -f celesta_daemon
 
 *Создано: 2025-11-30*
 *Устройство: Termux на Android*
-*Экосистема: Defender + Celesta + Leo*
+*Экосистема: Defender + Selesta + Leo*

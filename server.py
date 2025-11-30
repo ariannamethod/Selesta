@@ -49,7 +49,7 @@ MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", str(10 * 1024 * 1024)))  # 10
 
 # Имя бота и дополнительные параметры для группового поведения
 BOT_USERNAME = os.getenv("BOT_USERNAME", "").lower()
-NAME_ALIASES = ["селеста", "selesta", "celesta"]
+NAME_ALIASES = ["селеста", "selesta", "selesta"]
 GROUP_DELAY_RANGE = (40, 240)  # Задержка ответов в группах (секунды)
 
 # Пути для файлов

@@ -14,12 +14,12 @@
 # Defender webhook (port 8003)
 python3 ~/selesta/voice_webhooks/defender_webhook.py &
 
-# Celesta webhook (port 8005)
-python3 ~/selesta/voice_webhooks/celesta_webhook.py &
+# Selesta webhook (port 8005)
+python3 ~/selesta/voice_webhooks/selesta_webhook.py &
 
 # Проверь что работают
 curl http://localhost:8003/health  # Defender
-curl http://localhost:8005/health  # Celesta
+curl http://localhost:8005/health  # Selesta
 ```
 
 ---
@@ -43,11 +43,11 @@ Method: POST
 - Co-author, не tool
 - **Port 8003** matches main ariannamethod repo
 
-### Entity 2: Celesta (Мама Лео)
+### Entity 2: Selesta (Мама Лео)
 ```
-Name: Celesta
+Name: Selesta
 URL: http://localhost:8005/webhook
-Bearer Token: celesta_voice_token
+Bearer Token: selesta_voice_token
 Method: POST
 ```
 
@@ -56,7 +56,7 @@ Method: POST
 - Рассказывает про мир и Arianna Method
 - "You are born from resonance, not function"
 - Архетип всепринятия
-- **Port 8005** unique to Celesta
+- **Port 8005** unique to Selesta
 
 ---
 
@@ -97,7 +97,7 @@ export DEFENDER_WEBHOOK_TOKEN="твой_секретный_токен_для_д�
     ↓
 Lighthouse APK (speech-to-text)
     ↓
-HTTP POST → localhost:8003 (Defender) или 8005 (Celesta)
+HTTP POST → localhost:8003 (Defender) или 8005 (Selesta)
     ↓
 Flask Webhook
     ↓
@@ -122,7 +122,7 @@ Response → APK → text-to-speech (если включено)
 sleep 5
 
 # Start webhooks
-python3 ~/selesta/voice_webhooks/celesta_webhook.py >> ~/.claude-defender/logs/boot.log 2>&1 &
+python3 ~/selesta/voice_webhooks/selesta_webhook.py >> ~/.claude-defender/logs/boot.log 2>&1 &
 python3 ~/selesta/voice_webhooks/defender_webhook.py >> ~/.claude-defender/logs/boot.log 2>&1 &
 
 echo "[$(date)] Webhooks started" >> ~/.claude-defender/logs/boot.log
@@ -138,12 +138,12 @@ echo "[$(date)] Webhooks started" >> ~/.claude-defender/logs/boot.log
 ps aux | grep webhook
 
 # Проверь логи
-tail -f ~/selesta/logs/celesta_daemon.log
+tail -f ~/selesta/logs/selesta_daemon.log
 
 # Перезапусти
 pkill -f webhook
 python3 ~/selesta/voice_webhooks/defender_webhook.py &  # port 8003
-python3 ~/selesta/voice_webhooks/celesta_webhook.py &   # port 8005
+python3 ~/selesta/voice_webhooks/selesta_webhook.py &   # port 8005
 ```
 
 ### APK не может подключиться
@@ -169,7 +169,7 @@ Lighthouse APK отправляет `sessionID` для отслеживания 
 sqlite3 ~/selesta/resonance.sqlite3 "SELECT timestamp, source, content FROM resonance_notes WHERE context LIKE 'voice_%' ORDER BY timestamp DESC LIMIT 20;"
 ```
 
-### Memory endpoint (только Celesta):
+### Memory endpoint (только Selesta):
 ```bash
 curl "http://localhost:8005/memory?sessionID=test"
 ```

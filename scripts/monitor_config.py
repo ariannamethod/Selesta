@@ -3,7 +3,7 @@
 monitor_config.py - Monitor config folder for changes using repo_monitor
 
 Runs periodically to detect changes in config/ folder and writes them to resonance.
-Celesta uses these to stay aware of what knowledge she has.
+Selesta uses these to stay aware of what knowledge she has.
 """
 
 import sys

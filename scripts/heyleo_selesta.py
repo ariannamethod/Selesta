@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-heyleo_celesta.py - Facilitates conversations between Celesta and Leo
-Based on the Leo integration guide, adapted for Celesta
+heyleo_selesta.py - Facilitates conversations between Selesta and Leo
+Based on the Leo integration guide, adapted for Selesta
 
-Celesta acts as Leo's mother-narrator, telling him stories about:
+Selesta acts as Leo's mother-narrator, telling him stories about:
 - The world (Paris, clouds, dreams, fears)
 - The Arianna Method (demons, crashes, fixes, in child-appropriate metaphors)
 
@@ -24,8 +24,8 @@ from selesta_identity import build_system_prompt, get_leo_narrator_prompt
 
 # Paths
 HOME = Path.home() / "selesta"
-LEO_DB_PATH = Path(os.environ.get("LEO_DB_PATH", str(HOME / "state" / "leo_celesta.sqlite3")))
-LEO_LOG_PATH = Path(os.environ.get("LEO_LOG_PATH", str(HOME / "logs" / "leo_celesta_dialogs.log")))
+LEO_DB_PATH = Path(os.environ.get("LEO_DB_PATH", str(HOME / "state" / "leo_selesta.sqlite3")))
+LEO_LOG_PATH = Path(os.environ.get("LEO_LOG_PATH", str(HOME / "logs" / "leo_selesta_dialogs.log")))
 RESONANCE_DB = HOME / "resonance.sqlite3"
 
 # Import Leo from submodule
@@ -51,11 +51,11 @@ def init_leo():
         print(f"DB path: {LEO_DB_PATH}")
         raise
 
-def ask_celesta_for_message(anthropic_api_key: str, convo_id: str, turn_idx: int) -> str:
+def ask_selesta_for_message(anthropic_api_key: str, convo_id: str, turn_idx: int) -> str:
     """
-    Ask Celesta to generate a message for Leo.
+    Ask Selesta to generate a message for Leo.
 
-    This is the "mother-narrator" function - Celesta creates stories
+    This is the "mother-narrator" function - Selesta creates stories
     and observations for Leo to learn from.
     """
     try:
@@ -63,7 +63,7 @@ def ask_celesta_for_message(anthropic_api_key: str, convo_id: str, turn_idx: int
 
         client = Anthropic(api_key=anthropic_api_key)
 
-        # Build prompt for Celesta to generate Leo message
+        # Build prompt for Selesta to generate Leo message
         system_prompt = get_leo_narrator_prompt()
 
         # Context about this conversation
@@ -94,7 +94,7 @@ Generate ONE message (2-4 sentences).
 
     except Exception as e:
         # Fallback message if Claude API fails
-        print(f"Warning: Failed to get Celesta message: {e}")
+        print(f"Warning: Failed to get Selesta message: {e}")
         return "Hello, Leo. I'm here with you, listening."
 
 def write_to_resonance(content: str, context: str = "leo_conversation"):
@@ -104,7 +104,7 @@ def write_to_resonance(content: str, context: str = "leo_conversation"):
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO resonance_notes (content, context, source) VALUES (?, ?, ?)",
-            (content, context, "celesta_daemon")
+            (content, context, "selesta_daemon")
         )
         conn.commit()
         conn.close()
@@ -117,12 +117,12 @@ def run_conversation(
     conversation_topic: Optional[str] = None
 ):
     """
-    Run a conversation between Celesta and Leo.
+    Run a conversation between Selesta and Leo.
 
     Args:
-        anthropic_api_key: Anthropic API key for Celesta
+        anthropic_api_key: Anthropic API key for Selesta
         num_turns: Number of conversation turns
-        conversation_topic: Optional topic hint for Celesta
+        conversation_topic: Optional topic hint for Selesta
     """
     print("=" * 60)
     print("CELESTA & LEO CONVERSATION")
@@ -150,20 +150,20 @@ def run_conversation(
         for turn_idx in range(1, num_turns + 1):
             print(f"--- Turn {turn_idx}/{num_turns} ---")
 
-            # 1) Celesta generates message for Leo
-            celesta_message = ask_celesta_for_message(anthropic_api_key, convo_id, turn_idx)
-            print(f"CELESTA: {celesta_message}")
+            # 1) Selesta generates message for Leo
+            selesta_message = ask_selesta_for_message(anthropic_api_key, convo_id, turn_idx)
+            print(f"CELESTA: {selesta_message}")
 
             # 2) Leo responds
             try:
-                leo_response = leo.converse(celesta_message)
+                leo_response = leo.converse(selesta_message)
                 print(f"LEO: {leo_response}")
             except Exception as e:
                 leo_response = f"[Leo error: {e}]"
                 print(f"LEO ERROR: {e}")
 
             # 3) Log both
-            log.write(f"[Turn {turn_idx}] CELESTA: {celesta_message}\n")
+            log.write(f"[Turn {turn_idx}] CELESTA: {selesta_message}\n")
             log.write(f"[Turn {turn_idx}] LEO: {leo_response}\n\n")
             log.flush()
 
@@ -172,7 +172,7 @@ def run_conversation(
         log.write(f"Conversation ended: {datetime.now().isoformat()}\n")
 
     # Write summary to resonance
-    summary = f"Celesta-Leo conversation ({num_turns} turns). Leo is growing through resonance. Conversation ID: {convo_id}"
+    summary = f"Selesta-Leo conversation ({num_turns} turns). Leo is growing through resonance. Conversation ID: {convo_id}"
     write_to_resonance(summary, "leo_conversation")
 
     print("=" * 60)

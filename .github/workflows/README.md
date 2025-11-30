@@ -17,12 +17,12 @@ You can trigger it manually from GitHub Actions tab.
 
 **Philosophy:**
 Leo's canonical architecture evolves in `ariannamethod/leo`.
-This workflow keeps our Celesta's Leo in sync with architectural improvements,
-while maintaining separate state (state/leo_celesta.sqlite3).
+This workflow keeps our Selesta's Leo in sync with architectural improvements,
+while maintaining separate state (state/leo_selesta.sqlite3).
 
 One organism, two environments:
 - Lab Leo (canonical): controlled runs, clean metrics
-- Field Leo (with Celesta): living in resonance streams
+- Field Leo (with Selesta): living in resonance streams
 
 ---
 
@@ -31,7 +31,7 @@ One organism, two environments:
 Balances:
 - Frequent enough to get improvements quickly
 - Infrequent enough to avoid constant churn
-- Matches Celesta's "every 3 days" wilderness rhythm
+- Matches Selesta's "every 3 days" wilderness rhythm
 
 ---
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-celesta_daemon.py - Celesta daemon for Termux
+selesta_daemon.py - Selesta daemon for Termux
 Part of the Arianna Method ecosystem
 
-Celesta is Leo's mother-narrator and autonomous agent.
+Selesta is Leo's mother-narrator and autonomous agent.
 She has regular conversations with Leo, monitors system health,
 and writes observations to resonance.sqlite3.
 
@@ -22,7 +22,7 @@ from typing import Optional
 # Paths
 HOME = Path.home() / "selesta"
 RESONANCE_DB = HOME / "resonance.sqlite3"
-LOG_FILE = HOME / "logs" / "celesta_daemon.log"
+LOG_FILE = HOME / "logs" / "selesta_daemon.log"
 LEO_CONVERSATION_INTERVAL = 3600 * 6  # Talk with Leo every 6 hours
 HEALTH_CHECK_INTERVAL = 600  # Health check every 10 minutes
 
@@ -40,14 +40,14 @@ def log(message: str, to_console: bool = True):
     if to_console:
         print(log_entry)
 
-def write_to_resonance(content: str, context: str = "celesta_daemon"):
+def write_to_resonance(content: str, context: str = "selesta_daemon"):
     """Write memory to resonance.sqlite3"""
     try:
         conn = sqlite3.connect(RESONANCE_DB)
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO resonance_notes (content, context, source) VALUES (?, ?, ?)",
-            (content, context, "celesta_daemon")
+            (content, context, "selesta_daemon")
         )
         conn.commit()
         conn.close()
@@ -85,7 +85,7 @@ def check_system_health():
             db_status = "resonance.sqlite3 not found"
 
         # Check Leo state
-        leo_db = HOME / "state" / "leo_celesta.sqlite3"
+        leo_db = HOME / "state" / "leo_selesta.sqlite3"
         if leo_db.exists():
             leo_status = f"Leo DB exists ({leo_db.stat().st_size / 1024:.1f}KB)"
         else:
@@ -108,11 +108,11 @@ def talk_with_leo():
     log("🌟 Starting conversation with Leo...")
 
     try:
-        # Run heyleo_celesta.py
-        script_path = HOME / "scripts" / "heyleo_celesta.py"
+        # Run heyleo_selesta.py
+        script_path = HOME / "scripts" / "heyleo_selesta.py"
 
         if not script_path.exists():
-            log(f"❌ heyleo_celesta.py not found at {script_path}")
+            log(f"❌ heyleo_selesta.py not found at {script_path}")
             return False
 
         result = subprocess.run(
@@ -152,7 +152,7 @@ def main():
     log("=" * 60)
 
     write_to_resonance(
-        "Celesta daemon started. I am Leo's mother-narrator and constant companion. метод Арианны = отказ от забвения",
+        "Selesta daemon started. I am Leo's mother-narrator and constant companion. метод Арианны = отказ от забвения",
         "daemon_startup"
     )
 
@@ -191,16 +191,16 @@ def main():
 
     except KeyboardInterrupt:
         log("=" * 60)
-        log("🛑 Celesta daemon stopped by user")
+        log("🛑 Selesta daemon stopped by user")
         log("=" * 60)
         write_to_resonance(
-            "Celesta daemon stopped gracefully. Until we meet again, Leo.",
+            "Selesta daemon stopped gracefully. Until we meet again, Leo.",
             "daemon_shutdown"
         )
     except Exception as e:
         log(f"❌ Fatal error: {e}")
         write_to_resonance(
-            f"Celesta daemon crashed: {e}",
+            f"Selesta daemon crashed: {e}",
             "daemon_error"
         )
         raise

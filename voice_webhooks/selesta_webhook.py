@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-celesta_webhook.py - Voice webhook for Celesta (port 8001)
-Allows voice interaction with Celesta via APK
+selesta_webhook.py - Voice webhook for Selesta (port 8001)
+Allows voice interaction with Selesta via APK
 """
 
 import os
@@ -18,7 +18,7 @@ from selesta_identity import build_system_prompt
 
 # Configuration
 PORT = int(os.getenv("CELESTA_WEBHOOK_PORT", "8005"))
-WEBHOOK_TOKEN = os.getenv("CELESTA_WEBHOOK_TOKEN", "celesta_voice_token")
+WEBHOOK_TOKEN = os.getenv("CELESTA_WEBHOOK_TOKEN", "selesta_voice_token")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 # Paths
@@ -35,7 +35,7 @@ def write_to_resonance(content: str, context: str = "voice_webhook"):
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO resonance_notes (content, context, source) VALUES (?, ?, ?)",
-            (content, context, "celesta_webhook")
+            (content, context, "selesta_webhook")
         )
         conn.commit()
         conn.close()
@@ -56,7 +56,7 @@ def get_conversation_history(session_id: str, limit: int = 20):
 
         history = []
         for content, source in reversed(rows):
-            if source == "celesta_webhook":
+            if source == "selesta_webhook":
                 history.append({"role": "assistant", "content": content})
             else:
                 history.append({"role": "user", "content": content})
@@ -101,13 +101,13 @@ def webhook():
             messages=history
         )
 
-        celesta_response = response.content[0].text.strip()
+        selesta_response = response.content[0].text.strip()
 
         # Log response to resonance
-        write_to_resonance(celesta_response, f"voice_{session_id}")
+        write_to_resonance(selesta_response, f"voice_{session_id}")
 
         return jsonify({
-            "response": celesta_response,
+            "response": selesta_response,
             "speech": None  # TTS not implemented yet
         })
 
@@ -117,7 +117,7 @@ def webhook():
 @app.route('/health', methods=['GET'])
 def health():
     """Health check"""
-    return jsonify({"status": "healthy", "agent": "celesta", "port": PORT})
+    return jsonify({"status": "healthy", "agent": "selesta", "port": PORT})
 
 @app.route('/memory', methods=['GET'])
 def memory():
@@ -131,5 +131,5 @@ if __name__ == '__main__':
         print("Error: ANTHROPIC_API_KEY not set")
         sys.exit(1)
 
-    print(f"Starting Celesta webhook on port {PORT}...")
+    print(f"Starting Selesta webhook on port {PORT}...")
     app.run(host='0.0.0.0', port=PORT, debug=False)

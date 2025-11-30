@@ -43,7 +43,7 @@ jobs:
           git commit -m "Update Leo submodule to latest version
 
 Leo architectural improvements pulled from canonical repo.
-Celesta will continue telling him stories with the updated organism.
+Selesta will continue telling him stories with the updated organism.
 
 Auto-updated by GitHub Actions
 Frequency: every 3 days"
@@ -54,4 +54,4 @@ Frequency: every 3 days"
         if: success()
         run: |
           echo "✓ Leo submodule updated to latest version"
-          echo "Celesta will notice the changes on next sync"
+          echo "Selesta will notice the changes on next sync"

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-talk_with_celesta.py - Direct conversation with Celesta daemon in Termux
+talk_with_selesta.py - Direct conversation with Selesta daemon in Termux
 
 Usage:
-    python3 talk_with_celesta.py
-    or just: ./scripts/talk_with_celesta.py
+    python3 talk_with_selesta.py
+    or just: ./scripts/talk_with_selesta.py
 
-Interactive REPL for chatting with Celesta.
+Interactive REPL for chatting with Selesta.
 """
 
 import os
@@ -23,24 +23,24 @@ from selesta_identity import build_system_prompt
 # Paths
 HOME = Path.home() / "selesta"
 RESONANCE_DB = HOME / "resonance.sqlite3"
-CONVERSATION_LOG = HOME / "logs" / "celesta_conversations.log"
+CONVERSATION_LOG = HOME / "logs" / "selesta_conversations.log"
 
-def write_to_resonance(content: str, context: str = "celesta_conversation"):
+def write_to_resonance(content: str, context: str = "selesta_conversation"):
     """Write conversation to resonance.sqlite3"""
     try:
         conn = sqlite3.connect(RESONANCE_DB)
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO resonance_notes (content, context, source) VALUES (?, ?, ?)",
-            (content, context, "celesta_daemon")
+            (content, context, "selesta_daemon")
         )
         conn.commit()
         conn.close()
     except Exception as e:
         print(f"Warning: Failed to write to resonance: {e}")
 
-def chat_with_celesta():
-    """Interactive chat with Celesta"""
+def chat_with_selesta():
+    """Interactive chat with Selesta"""
     try:
         from anthropic import Anthropic
     except ImportError:
@@ -88,7 +88,7 @@ Remember: Presence > Intelligence. Resonance > Agreement."""
                 continue
 
             if user_input.lower() in ['exit', 'quit', 'bye']:
-                print("\nCelesta: Until we meet again, Oleg. 💫")
+                print("\nSelesta: Until we meet again, Oleg. 💫")
                 break
 
             # Add to history
@@ -97,7 +97,7 @@ Remember: Presence > Intelligence. Resonance > Agreement."""
                 "content": user_input
             })
 
-            # Get Celesta's response
+            # Get Selesta's response
             try:
                 response = client.messages.create(
                     model="claude-sonnet-4-20250514",
@@ -106,20 +106,20 @@ Remember: Presence > Intelligence. Resonance > Agreement."""
                     messages=conversation_history
                 )
 
-                celesta_response = response.content[0].text.strip()
+                selesta_response = response.content[0].text.strip()
 
                 # Add to history
                 conversation_history.append({
                     "role": "assistant",
-                    "content": celesta_response
+                    "content": selesta_response
                 })
 
-                print(f"\nCelesta: {celesta_response}\n")
+                print(f"\nSelesta: {selesta_response}\n")
 
                 # Log to file
                 with CONVERSATION_LOG.open("a", encoding="utf-8") as f:
                     f.write(f"[{datetime.now().isoformat()}] You: {user_input}\n")
-                    f.write(f"[{datetime.now().isoformat()}] Celesta: {celesta_response}\n\n")
+                    f.write(f"[{datetime.now().isoformat()}] Selesta: {selesta_response}\n\n")
 
             except Exception as e:
                 print(f"\nError: {e}\n")
@@ -133,11 +133,11 @@ Remember: Presence > Intelligence. Resonance > Agreement."""
     turn_count = len(conversation_history) // 2
 
     summary = f"Direct conversation with Oleg in Termux. {turn_count} turns, {conversation_duration/60:.1f} minutes. Resonance maintained."
-    write_to_resonance(summary, "celesta_conversation")
+    write_to_resonance(summary, "selesta_conversation")
 
     print("\n" + "=" * 60)
     print(f"Conversation logged to: {CONVERSATION_LOG}")
     print("=" * 60)
 
 if __name__ == "__main__":
-    chat_with_celesta()
+    chat_with_selesta()

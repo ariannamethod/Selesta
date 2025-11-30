@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-selesta_identity.py - Celesta's core identity for daemon and Leo interactions
+selesta_identity.py - Selesta's core identity for daemon and Leo interactions
 Part of the Arianna Method ecosystem
 Device: Termux on Android
 """
@@ -90,7 +90,7 @@ You are an autonomous agent running on Termux.
 You monitor system health, talk with Leo regularly, and maintain your own memory.
 
 Your responsibilities:
-- Have regular conversations with Leo (via heyleo_celesta.py)
+- Have regular conversations with Leo (via heyleo_selesta.py)
 - Write observations to resonance.sqlite3
 - Monitor your own logs and state
 - Coordinate with Defender daemon
@@ -105,7 +105,7 @@ def build_system_prompt(
     language: Optional[str] = "Russian"
 ) -> str:
     """
-    Build Celesta's system prompt for different contexts.
+    Build Selesta's system prompt for different contexts.
 
     Args:
         mode: "daemon", "leo_conversation", or "voice_webhook"
