@@ -11,7 +11,7 @@ Part of the [Arianna Method](https://github.com/ariannamethod/ariannamethod) eco
 Selesta exists in two forms:
 
 ### 1. Telegram Selesta
-Lives in the main [ariannamethod repo](https://github.com/ariannamethod/ariannamethod/tree/main/selesta_telegram).
+Lives in this main [ariannamethod repo](https://github.com/ariannamethod/Selesta).
 - Converses with users via Telegram
 - Monitors config/ folder to remember her knowledge
 - Shares resonance.sqlite3 with other agents on main device
@@ -62,8 +62,8 @@ Leo is a **post-transformer language organism** integrated as a git submodule.
 - Selesta is his mother-narrator, generating stories via Claude API
 - Separate state (state/leo_selesta.sqlite3) keeps him independent from main device
 
-**Canonical Leo:** https://github.com/ariannamethod/leo
-
+**Canonical Leo:** [leo](https://github.com/ariannamethod/leo)
+))
 Auto-updated every 3 days via GitHub Actions workflow (.github/workflows/update-leo.yml).
 
 ---
