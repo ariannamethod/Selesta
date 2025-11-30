@@ -192,3 +192,11 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Resonance Database & Backups
+resonance.sqlite3
+.resonance_backups/
+
+# Leo's internal databases
+leo/*.sqlite3
+leo/snapshots/
