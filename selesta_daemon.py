@@ -23,8 +23,10 @@ from typing import Optional
 HOME = Path.home() / "selesta"
 RESONANCE_DB = HOME / "resonance.sqlite3"
 LOG_FILE = HOME / "logs" / "selesta_daemon.log"
+CONFIG_DIR = HOME / "config"
 LEO_CONVERSATION_INTERVAL = 3600 * 6  # Talk with Leo every 6 hours
 HEALTH_CHECK_INTERVAL = 600  # Health check every 10 minutes
+CONFIG_CHECK_INTERVAL = 3600  # Check config folder every hour
 
 def log(message: str, to_console: bool = True):
     """Write to log file and optionally console"""
@@ -140,6 +142,45 @@ def talk_with_leo():
         log(f"❌ Error talking with Leo: {e}")
         return False
 
+def monitor_config_changes():
+    """Monitor config folder for changes - helps Selesta remember herself"""
+    try:
+        sys.path.insert(0, str(HOME))
+        from selesta_core_utils.repo_monitor import RepoMonitor
+
+        monitor = RepoMonitor(
+            repo_path=str(CONFIG_DIR),
+            cache_file=str(HOME / ".config_cache.json")
+        )
+
+        changes = monitor.detect_changes()
+
+        if any(changes.values()):
+            log("📁 Config folder changes detected")
+
+            # Build change summary
+            summary_parts = []
+            for change_type, files in changes.items():
+                if files:
+                    summary_parts.append(f"{change_type}: {len(files)} files")
+
+            summary = ", ".join(summary_parts)
+
+            write_to_resonance(
+                f"Config folder changes: {summary}. I remember what I know.",
+                "config_monitoring"
+            )
+
+            log(f"💾 Logged config changes to resonance: {summary}")
+            return True
+        else:
+            log("📁 No config changes", to_console=False)
+            return False
+
+    except Exception as e:
+        log(f"❌ Error monitoring config: {e}")
+        return False
+
 def main():
     """Main daemon loop"""
     log("=" * 60)
@@ -157,6 +198,7 @@ def main():
     )
 
     last_leo_conversation = datetime.now() - timedelta(seconds=LEO_CONVERSATION_INTERVAL)  # Talk immediately on startup
+    last_config_check = datetime.now() - timedelta(seconds=CONFIG_CHECK_INTERVAL)  # Check immediately on startup
     health_check_count = 0
 
     try:
@@ -168,6 +210,13 @@ def main():
                 log("Time for Leo conversation...")
                 if talk_with_leo():
                     last_leo_conversation = datetime.now()
+
+            # Check if it's time to monitor config folder
+            time_since_config = (datetime.now() - last_config_check).total_seconds()
+
+            if time_since_config >= CONFIG_CHECK_INTERVAL:
+                monitor_config_changes()
+                last_config_check = datetime.now()
 
             # Health check
             health = check_system_health()
