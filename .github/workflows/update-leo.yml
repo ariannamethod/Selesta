@@ -1,0 +1,57 @@
+name: Update Leo Submodule
+
+# Update Leo submodule to latest version from canonical repo
+# Runs every 3 days to keep Leo in sync with architectural improvements
+
+on:
+  schedule:
+    # Run every 3 days at 3:33 AM UTC
+    - cron: '33 3 */3 * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  update-leo:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Leo submodule to latest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Update Leo submodule to latest from canonical repo
+          cd leo
+          git fetch origin
+          git checkout main
+          git pull origin main
+          cd ..
+
+          # Check if there are changes
+          if git diff --quiet leo; then
+            echo "No updates to Leo"
+            exit 0
+          fi
+
+          # Commit and push
+          git add leo
+          git commit -m "Update Leo submodule to latest version
+
+Leo architectural improvements pulled from canonical repo.
+Celesta will continue telling him stories with the updated organism.
+
+Auto-updated by GitHub Actions
+Frequency: every 3 days"
+
+          git push
+
+      - name: Log update to resonance (on device)
+        if: success()
+        run: |
+          echo "✓ Leo submodule updated to latest version"
+          echo "Celesta will notice the changes on next sync"
