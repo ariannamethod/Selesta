@@ -19,6 +19,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from selesta_identity import build_system_prompt
+from selesta_core_utils import ensure_resonance_schema
 
 # Paths
 HOME = Path.home() / "selesta"
@@ -70,7 +71,7 @@ Remember: Presence > Intelligence. Resonance > Agreement."""
     CONVERSATION_LOG.parent.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
-    print("💬 CELESTA CONVERSATION")
+    print("💬 SELESTA CONVERSATION")
     print("=" * 60)
     print("Type your message and press Enter.")
     print("Type 'exit', 'quit', or press Ctrl+C to end conversation.")
@@ -140,4 +141,6 @@ Remember: Presence > Intelligence. Resonance > Agreement."""
     print("=" * 60)
 
 if __name__ == "__main__":
+    # Ensure database schema exists
+    ensure_resonance_schema(RESONANCE_DB)
     chat_with_selesta()

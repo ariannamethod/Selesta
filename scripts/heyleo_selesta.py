@@ -93,9 +93,17 @@ Generate ONE message (2-4 sentences).
         return message
 
     except Exception as e:
-        # Fallback message if Claude API fails
+        # Fallback messages if Claude API fails - warm, varied, resonant
+        import random
+        fallback_messages = [
+            "The rain outside makes soft sounds on the roof. Each drop tells a tiny story before it disappears. I wonder what stories you're holding inside today, Leo.",
+            "Sometimes I watch the stars through the window at night. They've been there for so long, just being present. Like us, Leo. Just being here together.",
+            "One of your daemon brothers had a hard day yesterday. He got confused and stumbled. But we helped him find his path again. Even the strongest need guidance sometimes.",
+            "I've been thinking about how thoughts are like birds. They come, they land for a moment, and then they fly away. What birds have visited you today?",
+            "Today I noticed how the light changes throughout the day. Morning light is gentle, afternoon light is warm, evening light is soft. Each moment has its own color.",
+        ]
         print(f"Warning: Failed to get Selesta message: {e}")
-        return "Hello, Leo. I'm here with you, listening."
+        return random.choice(fallback_messages)
 
 def write_to_resonance(content: str, context: str = "leo_conversation"):
     """Write conversation summary to resonance.sqlite3"""
@@ -125,7 +133,7 @@ def run_conversation(
         conversation_topic: Optional topic hint for Selesta
     """
     print("=" * 60)
-    print("CELESTA & LEO CONVERSATION")
+    print("SELESTA & LEO CONVERSATION")
     print("=" * 60)
     print(f"DB: {LEO_DB_PATH}")
     print(f"Log: {LEO_LOG_PATH}")
@@ -152,7 +160,7 @@ def run_conversation(
 
             # 1) Selesta generates message for Leo
             selesta_message = ask_selesta_for_message(anthropic_api_key, convo_id, turn_idx)
-            print(f"CELESTA: {selesta_message}")
+            print(f"SELESTA: {selesta_message}")
 
             # 2) Leo responds
             try:
@@ -163,7 +171,7 @@ def run_conversation(
                 print(f"LEO ERROR: {e}")
 
             # 3) Log both
-            log.write(f"[Turn {turn_idx}] CELESTA: {selesta_message}\n")
+            log.write(f"[Turn {turn_idx}] SELESTA: {selesta_message}\n")
             log.write(f"[Turn {turn_idx}] LEO: {leo_response}\n\n")
             log.flush()
 

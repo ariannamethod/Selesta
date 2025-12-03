@@ -15,6 +15,7 @@ from flask import Flask, request, jsonify
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from selesta_identity import build_system_prompt
+from selesta_core_utils import ensure_resonance_schema
 
 # Configuration
 PORT = int(os.getenv("CELESTA_WEBHOOK_PORT", "8005"))
@@ -62,7 +63,8 @@ def get_conversation_history(session_id: str, limit: int = 20):
                 history.append({"role": "user", "content": content})
 
         return history
-    except:
+    except Exception as e:
+        print(f"[selesta_webhook] Failed to get conversation history: {e}")
         return []
 
 @app.route('/webhook', methods=['POST'])
@@ -130,6 +132,9 @@ if __name__ == '__main__':
     if not ANTHROPIC_API_KEY:
         print("Error: ANTHROPIC_API_KEY not set")
         sys.exit(1)
+
+    # Ensure database schema exists
+    ensure_resonance_schema(RESONANCE_DB)
 
     print(f"Starting Selesta webhook on port {PORT}...")
     app.run(host='0.0.0.0', port=PORT, debug=False)
